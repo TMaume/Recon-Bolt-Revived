@@ -109,6 +109,14 @@ final class AccountManager: ObservableObject {
 		activeAccount = try StoredAccount(session: session, context: context)
 	}
 	
+	func addAccount(redirectURL: URL, cookies: [HTTPCookie]) async throws {
+		let session = try await APISession(redirectURL: redirectURL, cookies: cookies)
+		if !storedAccounts.contains(session.userID) {
+			storedAccounts.append(session.userID)
+		}
+		activeAccount = try StoredAccount(session: session, context: context)
+	}
+	
 	func removeAccounts(at offsets: IndexSet) {
 		let isDeletingActive = offsets.contains { storedAccounts[$0] == activeAccount?.id }
 		if isDeletingActive {
