@@ -4,3 +4,10 @@ xcuserdata/
 # Swift Package Manager
 /.swiftpm
 *.xcloc
+
+# SwiftPM & xtool build artifacts
+/.build/
+/.bsp/
+/.xtool-tmp/
+/xtool/
+/Package.resolved

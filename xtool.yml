@@ -1,0 +1,5 @@
+version: 1
+bundleID: com.dtl21.Recon-Bolt
+displayName: Recon Bolt
+infoPath: xtool-Info.plist
+entitlements: {}

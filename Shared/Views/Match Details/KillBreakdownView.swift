@@ -98,10 +98,10 @@ struct KillBreakdownView: View {
 				.measuring(\.height, as: TopHeight.self)
 				.frame(height: topHeight, alignment: .bottom)
 				.background(
-					LinearGradient(
+					AnyShapeStyle(LinearGradient(
 						gradient: .init(.valorantBlue),
 						startPoint: .bottom, endPoint: .top
-					)
+					))
 					.opacity(backgroundOpacity)
 				)
 			
@@ -122,10 +122,10 @@ struct KillBreakdownView: View {
 				.measuring(\.height, as: BottomHeight.self)
 				.frame(height: bottomHeight, alignment: .top)
 				.background(
-					LinearGradient(
+					AnyShapeStyle(LinearGradient(
 						gradient: .init(.valorantRed),
 						startPoint: .top, endPoint: .bottom
-					)
+					))
 					.opacity(backgroundOpacity)
 				)
 		}
