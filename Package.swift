@@ -15,7 +15,7 @@ let package = Package(
 		),
 	],
 	dependencies: [
-		.package(path: "../ValorantAPI"),
+		.package(url: "https://github.com/TMaume/ValorantAPI-Revived.git", revision: "cbf47502132cce42f2cb943133cc7041a4c8c758"),
 		.package(url: "https://github.com/juliand665/CGeometry.git", from: "0.4.0"),
 		.package(url: "https://github.com/juliand665/HandyOperators.git", from: "2.1.0"),
 		.package(url: "https://github.com/juliand665/UserDefault.git", from: "1.0.2"),
@@ -26,7 +26,7 @@ let package = Package(
 		.target(
 			name: "Recon_Bolt",
 			dependencies: [
-				.product(name: "ValorantAPI", package: "ValorantAPI"),
+				.product(name: "ValorantAPI", package: "ValorantAPI-Revived"),
 				.product(name: "CGeometry", package: "CGeometry"),
 				.product(name: "HandyOperators", package: "HandyOperators"),
 				.product(name: "UserDefault", package: "UserDefault"),
