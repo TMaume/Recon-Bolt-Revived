@@ -206,7 +206,12 @@ final class StoredAccount: ObservableObject, Identifiable {
 		didSet { trySave() }
 	}
 	
-	private(set) lazy var client = ValorantClient(session: session) <- {
+	private(set) lazy var client = ValorantClient(
+		session: session,
+		urlSessionOverride: .init(configuration: .ephemeral <- {
+			$0.httpAdditionalHeaders = ["User-Agent": ""]
+		})
+	) <- {
 		sessionUpdateListener = $0.onSessionUpdate { [weak self] session in
 			guard let self else { return }
 			print("storing updated session")
