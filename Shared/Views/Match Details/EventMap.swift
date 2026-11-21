@@ -56,7 +56,7 @@ struct EventMap: View {
 		if location.isDead {
 			Image(systemName: "xmark")
 		} else if let angle = location.angle {
-			Image("MapPlayer")
+			Image.bundledAsset("MapPlayer", renderingMode: .template)
 				.foregroundStyle(isActor ? .primary : .secondary)
 				.rotationEffect(.radians(angle))
 		} else {

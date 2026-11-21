@@ -36,12 +36,14 @@ let package = Package(
 			path: "Shared",
 			exclude: [
 				"Assets.xcassets",
+				"BundledIcons",
 				"Preview Content/Preview Assets.xcassets",
 				"Preview Content/Data",
 				"Products.storekit",
 			],
 			resources: [
 				.process("Strings"),
+				.copy("BundledAssets"),
 			]
 		),
 	]

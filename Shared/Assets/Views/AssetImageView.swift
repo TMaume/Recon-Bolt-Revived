@@ -31,7 +31,7 @@ struct AssetImageView<Provider: AssetImageProvider>: View {
 				aspectRatio: aspectRatio,
 				shouldLoadImmediately: shouldLoadImmediately
 			)
-		} else if let id, let fallback = UIImage(named: "\(id)".uppercased()) {
+		} else if let id, let fallback = UIImage.bundledAsset(named: "\(id)".uppercased()) {
 			Image(uiImage: fallback)
 				.renderingMode(renderingMode)
 				.resizable()

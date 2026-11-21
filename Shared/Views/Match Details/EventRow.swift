@@ -126,7 +126,7 @@ struct EventRow: View, Animatable {
 	}
 	
 	private func iconImage(name: String) -> some View {
-		Image("\(name) Icon")
+		Image.bundledAsset("\(name) Icon", renderingMode: .template)
 			.resizable()
 			.padding(4)
 			.foregroundStyle(.thickMaterial)

@@ -37,7 +37,7 @@ struct InAppStorefront: View {
 			
 			Spacer()
 			
-			Image("Pro Icon")
+			Image.bundledAsset("Pro Icon")
 				.resizable()
 				.aspectRatio(contentMode: .fit)
 				.frame(minWidth: 120, maxHeight: 256)
@@ -188,7 +188,7 @@ struct ProFeaturesOverview: View {
 	}
 	
 	func image(_ name: String) -> some View {
-		Image("pro features/\(name)")
+		Image.bundledAsset("pro features/\(name)")
 			.resizable()
 			.aspectRatio(contentMode: .fit)
 			.fixedSize(horizontal: false, vertical: true)

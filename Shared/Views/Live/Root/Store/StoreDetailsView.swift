@@ -196,7 +196,7 @@ struct StoreDetailsView: View {
 			(assets?.playerCards[.init(rawID: reward.itemID)]?.smallArt).view()
 				.cornerRadius(8)
 		case .titles:
-			Image("Player Title")
+			Image.bundledAsset("Player Title", renderingMode: .template)
 				.resizable()
 				.foregroundStyle(.secondary)
 		default:

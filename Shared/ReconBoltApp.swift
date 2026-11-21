@@ -37,6 +37,7 @@ struct ReconBoltApp: App {
 				.environment(\.location, accountManager.activeAccount?.location)
 				.environment(\.ownsProVersion, store.ownsProVersion)
 				.preferredColorScheme(settings.theme.colorScheme)
+				.tint(Color(.displayP3, red: 0.940, green: 0.019, blue: 0.311))
 				.task(id: assetManager.assets?.version) {
 					guard let version = assetManager.assets?.version else { return }
 					accountManager.clientVersion = version.riotClientVersion

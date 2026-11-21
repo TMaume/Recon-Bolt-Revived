@@ -83,7 +83,7 @@ extension AppIcon {
 		
 		var body: some View {
 			let squircle = RoundedRectangle(cornerRadius: 0.2 * size, style: .continuous)
-			return Image("app icons/\(icon.key ?? "AppIcon")")
+			return Image.bundledAsset("app icons/\(icon.key ?? "AppIcon")")
 				.resizable()
 				.aspectRatio(contentMode: .fit)
 				.mask { squircle }
