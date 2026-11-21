@@ -10,11 +10,12 @@ struct WeaponLoadoutView: View {
 	var body: some View {
 		List {
 			ForEach(Weapon.ID.orderInCollection, id: \.self) { gunID in
-				let gun = $loadout[dynamicMember: \.guns[gunID]!]
-				Section {
-					GunCell(gun: gun, loadout: $loadout, inventory: inventory)
-				} header: {
-					Text(assets?.weapons[gun.wrappedValue.id]?.displayName ?? "")
+				if let gun = Binding($loadout[dynamicMember: \.guns[gunID]]) {
+					Section {
+						GunCell(gun: gun, loadout: $loadout, inventory: inventory)
+					} header: {
+						Text(assets?.weapons[gun.wrappedValue.id]?.displayName ?? "")
+					}
 				}
 			}
 		}
