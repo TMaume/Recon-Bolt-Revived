@@ -65,6 +65,6 @@ extension EnvironmentValues {
 	}
 	
 	private enum OwnsProVersionKey: EnvironmentKey {
-		static let defaultValue = false
+		static let defaultValue = true
 	}
 }
