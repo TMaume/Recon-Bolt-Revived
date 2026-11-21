@@ -8,6 +8,7 @@ struct AgentSelectView: View {
 	@State var hasEnded = false
 	
 	@Environment(\.valorantLoad) private var load
+	@Environment(\.dismiss) private var dismiss
 	
 	var body: some View {
 		ScrollView {
@@ -45,7 +46,14 @@ struct AgentSelectView: View {
 					
 					Divider()
 					
-					AgentPickerView(pregameInfo: $pregameInfo, userID: userID, inventory: inventory)
+					AgentPickerView(
+						pregameInfo: $pregameInfo,
+						userID: userID,
+						inventory: inventory
+					) {
+						hasEnded = true
+						dismiss()
+					}
 				}
 			}
 		}

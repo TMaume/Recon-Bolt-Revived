@@ -5,6 +5,10 @@ struct AgentPickerView: View {
 	@Binding var pregameInfo: LivePregameInfo
 	let userID: User.ID
 	let inventory: Inventory
+	var onDodge: () -> Void = {}
+	
+	@State private var isConfirmingDodge = false
+	@State private var isDodging = false
 	
 	@Environment(\.valorantLoad) private var load
 	@Environment(\.assets) private var assets
@@ -27,23 +31,61 @@ struct AgentPickerView: View {
 		VStack(spacing: 24) {
 			let selectedAgentID = ownPlayer.agentID
 			
-			AsyncButton {
-				await load {
-					pregameInfo = try await $0.lockInAgent(selectedAgentID!, in: pregameInfo.id)
+			HStack(spacing: 12) {
+				AsyncButton {
+					await load {
+						pregameInfo = try await $0.lockInAgent(selectedAgentID!, in: pregameInfo.id)
+					}
+					ReviewManager.registerUsage(points: 10)
+					ReviewManager.requestReviewIfAppropriate()
+				} label: {
+					let agentName = selectedAgentID
+						.flatMap { assets?.agents[$0] }?
+						.displayName
+					
+					Text(agentName.map { "Lock In \($0)" } ?? "Lock In")
+						.bold()
+						.lineLimit(1)
 				}
-				ReviewManager.registerUsage(points: 10)
-				ReviewManager.requestReviewIfAppropriate()
-			} label: {
-				let agentName = selectedAgentID
-					.flatMap { assets?.agents[$0] }?
-					.displayName
+				.buttonStyle(.borderedProminent)
+				.disabled(selectedAgentID == nil || takenAgents.contains(selectedAgentID!))
+				.disabled(hasSelectedAgent) // can't move this out because then it'd affect the relock gesture too
 				
-				Text(agentName.map { "Lock In \($0)" } ?? "Lock In")
-					.bold()
+				Button(role: .destructive) {
+					isConfirmingDodge = true
+				} label: {
+					Label("Dodge", systemImage: "rectangle.portrait.and.arrow.right")
+						.bold()
+						.lineLimit(1)
+						.opacity(isDodging ? 0.25 : 1)
+						.overlay {
+							if isDodging {
+								ProgressView()
+							}
+						}
+				}
+				.buttonStyle(.bordered)
+				.tint(.red)
+				.disabled(isDodging)
+				.confirmationDialog(
+					"Dodge Match?",
+					isPresented: $isConfirmingDodge,
+					titleVisibility: .visible
+				) {
+					Button("Dodge Match", role: .destructive) {
+						isDodging = true
+						Task {
+							defer { isDodging = false }
+							await load {
+								try await $0.quitPregameMatch(pregameInfo.id)
+								onDodge()
+							}
+						}
+					}
+				} message: {
+					Text("Quitting during agent select may result in a queue penalty or RR loss.")
+				}
 			}
-			.buttonStyle(.borderedProminent)
-			.disabled(selectedAgentID == nil || takenAgents.contains(selectedAgentID!))
-			.disabled(hasSelectedAgent) // can't move this out because then it'd affect the relock gesture too
 			
 			if let agents = assets?.agents.values {
 				let sortedAgents = agents.sorted(on: \.displayName)
