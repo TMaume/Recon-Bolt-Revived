@@ -12,6 +12,7 @@ struct SettingsView: View {
 	/// Lives outside the `Form` so re-renders of the list (e.g. on scene activation) can never recreate the login sheet.
 	@State private var loginTarget: AccountSettingsView.LoginTarget?
 	@StateObject private var loginWebViewModel = RiotLoginWebViewModel()
+	@State private var showingAccentColorPicker = false
 	
 	@Namespace private var storefrontID
 	
@@ -120,14 +121,31 @@ struct SettingsView: View {
 			}
 		}
 		
-		ColorPicker(selection: settings.accentColorBinding, supportsOpacity: false) {
+		Button {
+			showingAccentColorPicker = true
+		} label: {
 			Label {
-				Text("Custom Accent Color")
+				HStack {
+					Text("Custom Accent Color")
+					Spacer()
+					Circle()
+						.fill(settings.effectiveAccentColor)
+						.frame(width: 24, height: 24)
+						.overlay {
+							Circle()
+								.strokeBorder(Color.primary.opacity(0.2), lineWidth: 1)
+						}
+				}
 			} icon: {
 				Image(systemName: "paintpalette")
 					.foregroundStyle(.tint)
 			}
 		}
+		.buttonStyle(.plain)
+		.background(
+			AccentColorPickerPresenter(isPresented: $showingAccentColorPicker, settings: settings)
+				.frame(width: 0, height: 0)
+		)
 		
 		Button {
 			settings.resetAccentColor()
@@ -160,6 +178,110 @@ private extension AppSettings.Theme {
 			return Text("Light Mode", comment: "App Theme")
 		case .dark:
 			return Text("Dark Mode", comment: "App Theme")
+		}
+	}
+}
+
+private struct AccentColorPickerPresenter: UIViewControllerRepresentable {
+	@Binding var isPresented: Bool
+	@ObservedObject var settings: AppSettings
+	
+	func makeCoordinator() -> Coordinator {
+		Coordinator(parent: self)
+	}
+	
+	func makeUIViewController(context: Context) -> UIViewController {
+		UIViewController()
+	}
+	
+	func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+		context.coordinator.parent = self
+		guard isPresented, context.coordinator.presentedPicker == nil else { return }
+		
+		let picker = UIColorPickerViewController()
+		picker.title = "Accent Color"
+		picker.supportsAlpha = false
+		picker.selectedColor = settings.pickerSelectedUIColor
+		picker.delegate = context.coordinator
+		picker.presentationController?.delegate = context.coordinator
+		
+		context.coordinator.initialComponents = settings.customAccentColorComponents
+		context.coordinator.didFinish = false
+		context.coordinator.presentedPicker = picker
+		
+		DispatchQueue.main.async {
+			let host: UIViewController?
+			if uiViewController.viewIfLoaded?.window != nil, uiViewController.presentedViewController == nil {
+				host = uiViewController
+			} else {
+				host = Self.topViewController()
+			}
+			guard let host, host.presentedViewController == nil else {
+				context.coordinator.presentedPicker = nil
+				isPresented = false
+				return
+			}
+			host.present(picker, animated: true)
+		}
+	}
+	
+	private static func topViewController() -> UIViewController? {
+		let keyWindow = UIApplication.shared.connectedScenes
+			.compactMap { $0 as? UIWindowScene }
+			.flatMap(\.windows)
+			.first(where: \.isKeyWindow)
+			?? UIApplication.shared.connectedScenes
+			.compactMap { $0 as? UIWindowScene }
+			.flatMap(\.windows)
+			.first
+		var current = keyWindow?.rootViewController
+		while let presented = current?.presentedViewController {
+			current = presented
+		}
+		return current
+	}
+	
+	final class Coordinator: NSObject, UIColorPickerViewControllerDelegate, UIAdaptivePresentationControllerDelegate {
+		var parent: AccentColorPickerPresenter
+		weak var presentedPicker: UIColorPickerViewController?
+		var initialComponents = ""
+		var didFinish = false
+		
+		init(parent: AccentColorPickerPresenter) {
+			self.parent = parent
+		}
+		
+		func colorPickerViewController(
+			_ viewController: UIColorPickerViewController,
+			didSelect color: UIColor,
+			continuously: Bool
+		) {
+			Task { @MainActor [settings = parent.settings] in
+				settings.setCustomAccentColor(color)
+			}
+		}
+		
+		func colorPickerViewControllerDidFinish(_ viewController: UIColorPickerViewController) {
+			finishIfNeeded()
+		}
+		
+		func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+			finishIfNeeded()
+		}
+		
+		private func finishIfNeeded() {
+			guard !didFinish else { return }
+			didFinish = true
+			presentedPicker = nil
+			let settings = parent.settings
+			let initial = initialComponents
+			Task { @MainActor [weak self] in
+				self?.parent.isPresented = false
+				try? await Task.sleep(for: .milliseconds(180))
+				if settings.customAccentColorComponents != initial {
+					settings.reloadAppForAccentChange()
+				}
+			}
 		}
 	}
 }

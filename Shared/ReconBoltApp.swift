@@ -20,6 +20,7 @@ struct ReconBoltApp: App {
 	@StateObject var seasonGoalStore = SeasonGoalStore()
 	@StateObject var socialManager = SocialManager()
 	@StateObject var lineupsManager = LineupsManager()
+	@State private var hasLaunched = false
 	
 	private var isTesting: Bool {
 		ProcessInfo.processInfo.environment["XCInjectBundleInto"] != nil
@@ -28,35 +29,42 @@ struct ReconBoltApp: App {
 	var body: some Scene {
 		WindowGroup {
 			if !isTesting {
-				ContentView(
-					accountManager: accountManager,
-					assetManager: assetManager,
-					settings: settings,
-					store: store
-				)
-				.onAppear { onLaunch() }
-				.environmentObject(accountManager)
-				.environmentObject(bookmarkList)
-				.environmentObject(imageManager)
-				.environmentObject(settings)
-				.environmentObject(configManager)
-				.environmentObject(loadoutPresetManager)
-				.environmentObject(wishlistManager)
-				.environmentObject(shopHistoryStore)
-				.environmentObject(UsernameHistoryStore.shared)
-				.environmentObject(playerSettingsSnapshotStore)
-				.environmentObject(seasonGoalStore)
-				.environmentObject(socialManager)
-				.environmentObject(lineupsManager)
-				.environment(\.configs, configManager.configs())
-				.environment(\.assets, assetManager.assets)
-				.environment(\.location, accountManager.activeAccount?.location)
-				.environment(\.ownsProVersion, store.ownsProVersion)
-				.preferredColorScheme(settings.theme.colorScheme)
-				.tint(settings.effectiveAccentColor)
-				.accentColor(settings.effectiveAccentColor)
+				Group {
+					ContentView(
+						accountManager: accountManager,
+						assetManager: assetManager,
+						settings: settings,
+						store: store
+					)
+					.environmentObject(accountManager)
+					.environmentObject(bookmarkList)
+					.environmentObject(imageManager)
+					.environmentObject(settings)
+					.environmentObject(configManager)
+					.environmentObject(loadoutPresetManager)
+					.environmentObject(wishlistManager)
+					.environmentObject(shopHistoryStore)
+					.environmentObject(UsernameHistoryStore.shared)
+					.environmentObject(playerSettingsSnapshotStore)
+					.environmentObject(seasonGoalStore)
+					.environmentObject(socialManager)
+					.environmentObject(lineupsManager)
+					.environment(\.configs, configManager.configs())
+					.environment(\.assets, assetManager.assets)
+					.environment(\.location, accountManager.activeAccount?.location)
+					.environment(\.ownsProVersion, store.ownsProVersion)
+					.preferredColorScheme(settings.theme.colorScheme)
+					.tint(settings.effectiveAccentColor)
+					.accentColor(settings.effectiveAccentColor)
+					.id(settings.accentReloadToken)
+				}
+				.onAppear {
+					guard !hasLaunched else { return }
+					hasLaunched = true
+					onLaunch()
+				}
 				.onChange(of: settings.customAccentColorComponents) { _ in
-					applyWindowTint(settings.effectiveAccentColor)
+					AppSettings.applyGlobalTint(settings.effectiveAccentColor)
 				}
 				.task(id: accountManager.activeAccount?.id) {
 					await socialManager.connectIfNeeded(using: accountManager.activeAccount?.client)
@@ -72,7 +80,7 @@ struct ReconBoltApp: App {
 	
 	private func onLaunch() {
 		ReviewManager.registerUsage(points: 2)
-		applyWindowTint(settings.effectiveAccentColor)
+		AppSettings.applyGlobalTint(settings.effectiveAccentColor)
 		
 		Task {
 			_ = await MatchRetentionManager.pruneIfEnabled(
@@ -87,17 +95,6 @@ struct ReconBoltApp: App {
 			try AVAudioSession.sharedInstance().setCategory(.playback)
 		} catch {
 			print("could not set audio session category: \(error)")
-		}
-	}
-	
-	private func applyWindowTint(_ color: Color) {
-		let uiColor = UIColor(color)
-		UIView.appearance().tintColor = uiColor
-		for scene in UIApplication.shared.connectedScenes {
-			guard let windowScene = scene as? UIWindowScene else { continue }
-			for window in windowScene.windows {
-				window.tintColor = uiColor
-			}
 		}
 	}
 }

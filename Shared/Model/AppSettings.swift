@@ -3,6 +3,8 @@ import SwiftUI
 final class AppSettings: ObservableObject {
 	static let defaultAccentColor = Color(.displayP3, red: 0.940, green: 0.019, blue: 0.311)
 	
+	@Published var accentReloadToken = UUID()
+	
 	@AppStorage("AppSettings.theme")
 	var theme = Theme.system
 	
@@ -30,6 +32,9 @@ final class AppSettings: ObservableObject {
 	
 	@AppStorage("Social.sortOfflineByLastSeen")
 	var sortOfflineByLastSeen = true
+	
+	@AppStorage("Social.friendsSortOrder")
+	var friendsSortOrder: FriendsSortOrder = .defaultOrder
 	
 	// Sign-in settings
 	@AppStorage("Login.clearCookiesOnLogin")
@@ -118,15 +123,79 @@ final class AppSettings: ObservableObject {
 		return Color(.sRGB, red: r, green: g, blue: b, opacity: 1)
 	}
 	
+	var pickerSelectedUIColor: UIColor {
+		let baseColor = hasCustomAccentColor ? effectiveAccentColor : Self.defaultAccentColor
+		let (r, g, b) = Self.clampedSRGBComponents(from: baseColor)
+		if let space = CGColorSpace(name: CGColorSpace.sRGB),
+		   let cgColor = CGColor(colorSpace: space, components: [CGFloat(r), CGFloat(g), CGFloat(b), 1])
+		{
+			return UIColor(cgColor: cgColor)
+		}
+		return UIColor(red: CGFloat(r), green: CGFloat(g), blue: CGFloat(b), alpha: 1)
+	}
+	
 	var matchRetentionLabel: String {
 		matchRetentionDays <= 0 ? "Off" : "\(matchRetentionDays) Days"
 	}
 	
+	@MainActor
+	static func applyGlobalTint(_ color: Color) {
+		let uiColor = UIColor(color)
+		UIView.appearance().tintColor = uiColor
+		UITabBar.appearance().tintColor = uiColor
+		UINavigationBar.appearance().tintColor = uiColor
+		for scene in UIApplication.shared.connectedScenes {
+			guard let windowScene = scene as? UIWindowScene else { continue }
+			for window in windowScene.windows {
+				window.tintColor = uiColor
+				if let root = window.rootViewController {
+					applyTintRecursively(uiColor, to: root)
+				}
+			}
+		}
+	}
+	
+	@MainActor
+	private static func applyTintRecursively(_ uiColor: UIColor, to vc: UIViewController) {
+		vc.viewIfLoaded?.tintColor = uiColor
+		if let tabBarController = vc as? UITabBarController {
+			tabBarController.tabBar.tintColor = uiColor
+			tabBarController.tabBar.setNeedsLayout()
+		}
+		if let navController = vc as? UINavigationController {
+			navController.navigationBar.tintColor = uiColor
+			navController.navigationBar.setNeedsLayout()
+		}
+		for child in vc.children {
+			applyTintRecursively(uiColor, to: child)
+		}
+		if let presented = vc.presentedViewController {
+			applyTintRecursively(uiColor, to: presented)
+		}
+	}
+	
+	@MainActor
+	func setCustomAccentColor(_ uiColor: UIColor) {
+		let (r, g, b) = Self.clampedSRGBComponents(from: Color(uiColor))
+		customAccentColorComponents = "\(r),\(g),\(b)"
+		objectWillChange.send()
+		Self.applyGlobalTint(effectiveAccentColor)
+	}
+	
+	@MainActor
+	func reloadAppForAccentChange() {
+		Self.applyGlobalTint(effectiveAccentColor)
+		accentReloadToken = UUID()
+	}
+	
+	@MainActor
 	func resetAccentColor() {
 		customAccentColorComponents = ""
 		objectWillChange.send()
+		reloadAppForAccentChange()
 	}
 	
+	@MainActor
 	func resetAll() {
 		theme = .system
 		customAccentColorComponents = ""
@@ -137,12 +206,56 @@ final class AppSettings: ObservableObject {
 		copyPlayerNames = true
 		openProfileDirectly = false
 		sortOfflineByLastSeen = true
+		friendsSortOrder = .defaultOrder
 		clearWebSignInDataOnOpen = true
 		matchRetentionDays = 14
 		keepsOwnMatches = true
 		keepsBookmarkedMatches = true
 		keepsUnlinkedMatches = false
 		objectWillChange.send()
+		reloadAppForAccentChange()
+	}
+	
+	enum FriendsSortOrder: String, Hashable, Codable, CaseIterable {
+		case defaultOrder
+		case alphabeticalAsc
+		case alphabeticalDesc
+		case lastSeen
+		case rank
+		case level
+		
+		var title: String {
+			switch self {
+			case .defaultOrder: return "Default"
+			case .alphabeticalAsc: return "Name (A–Z)"
+			case .alphabeticalDesc: return "Name (Z–A)"
+			case .lastSeen: return "Last Seen"
+			case .rank: return "Rank (Highest)"
+			case .level: return "Account Level"
+			}
+		}
+		
+		var shortTitle: String {
+			switch self {
+			case .defaultOrder: return "Default"
+			case .alphabeticalAsc: return "A–Z"
+			case .alphabeticalDesc: return "Z–A"
+			case .lastSeen: return "Last Seen"
+			case .rank: return "Rank"
+			case .level: return "Level"
+			}
+		}
+		
+		var icon: String {
+			switch self {
+			case .defaultOrder: return "line.3.horizontal.decrease"
+			case .alphabeticalAsc: return "textformat.abc"
+			case .alphabeticalDesc: return "textformat.abc"
+			case .lastSeen: return "clock.arrow.circlepath"
+			case .rank: return "trophy"
+			case .level: return "star.circle"
+			}
+		}
 	}
 	
 	enum Theme: String, Hashable, Codable, CaseIterable {
