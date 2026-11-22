@@ -2,23 +2,31 @@
   <img src="Resources/Icons/Transparent/Icon Transparent.png" alt="Icon" width=512 />
 </p>
 
-# Recon Bolt
+# Recon Bolt Revived
 
-This is a companion app for Valorant. It started as a way to view your competitive rank changes (back before the numbers were visible) and has now evolved into so much more, even allowing you to participate in agent select from anywhere. Check out the screenshots for a clearer overview than I could ever give in words!
+**Recon Bolt** was a popular open-source iOS companion app for **Valorant** originally created in **October 2022**. Built with SwiftUI, it started as a way to inspect hidden competitive RR changes and quickly grew into a full-featured mobile companion allowing players to:
 
-Unfortunately, this app needs your Riot username and password to function, but of course you can view the code yourself to check its safety, and the password is stored in the keychain rather than as plaintext.
+- **Track Career & Match History:** View competitive rank progress, RR changes, full match scoreboards, kill timelines, 2D round maps, and hit distribution breakdowns.
+- **Analyze Detailed Statistics:** Explore playtime by mode/premade, headshot percentages by weapon, and win rates across maps, acts, and sides.
+- **Live Match & Agent Select:** Monitor your party, inspect teammates' and opponents' ranks and match histories, pick or lock agents directly from your phone during Agent Select, or safely dodge a match.
+- **Store, Missions & Loadout:** Check your daily storefront rotation, bundles, wallet balances, and daily/weekly missions, and customize equipped weapon skins, buddies, sprays, player cards, and titles.
+- **Reference & Multi-Account Support:** Browse all agents, maps, and weapons, and switch seamlessly between multiple Riot accounts.
 
-## Discord
+## Background & Revival
 
-I've created a Discord server for this app! Feel free to [join the server](https://discord.gg/bwENMNRqNa) if you'd like to discuss it :)
+Unfortunately, active development on Recon Bolt was forced to stop in **2024** after Riot Games issued legal takedown threats, despite having reviewed and approved the application two years earlier. Left unmaintained, the app gradually broke as Riot updated its authentication flow, client headers, and game APIs throughout 2024, eventually locking out even the remaining users who still had the app installed.
 
-## Download on the App Store
+This repository brings **Recon Bolt back to life** ([`Recon-Bolt-Revived`](https://github.com/TMaume/Recon-Bolt-Revived) & [`ValorantAPI-Revived`](https://github.com/TMaume/ValorantAPI-Revived)) with fixes for all broken endpoints and several new features and improvements:
 
-The app is available on the App Store! Get it here:
+- **Riot WebView OAuth Login & 2FA Support:** Persistent WebView authentication directly through Riot's login flow (supporting 2FA app switching without resetting the session) with automatic cookie-based token refresh.
+- **Updated Riot & Asset APIs:** Fixed Cloudflare `403` blocks, dynamically resolved Riot client versions (`Invalid Headers`), updated contract progression decoding, migrated `playerloadout` to `v3` (`ActiveExpressions`), and fixed `valorant-api.com` asset parsing edge cases.
+- **New Content & Features:** Added newer weapons (`Bandit`, `Warden`, `Outlaw`), a **Dodge Match** confirmation button during Agent Select, **Pro features unlocked by default**, and disabled incognito player anonymization.
+- **Cross-Platform Linux Build (`xtool`):** Added SwiftPM + `xtool` single-bundle support (iOS 16+) with bundled primary/alternate app icons, UI assets, and App Group sandboxing fallbacks for easy sideloading.
 
-[![App Store Badge](Resources/App%20Store.svg)](https://apps.apple.com/app/recon-bolt/id1563649061)
-
-Please note that the app **only supports iOS 15+**, but you should be on the latest version of iOS anyway—iOS 15 supports all the same devices as iOS 14 and iOS 13 did. Jailbreaking is no excuse :p
+> [!NOTE]
+> Authentication uses Riot's official web login page directly inside an isolated `WKWebView`, so your Riot credentials are never handled in plaintext or sent anywhere outside Riot's servers.
+>
+> Since I do not have a paid Apple Developer account, I have not been able to test whether widgets still work, and they will not work for you either if you do not have one (App Groups and multiple extensions require a paid account).
 
 ## Screenshots
 
