@@ -33,6 +33,15 @@
 		</dict>
 		<key>CFBundleAlternateIcons</key>
 		<dict>
+			<key>AppIconOG</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>AppIconOG60x60</string>
+				</array>
+				<key>UIPrerenderedIcon</key>
+				<false/>
+			</dict>
 			<key>AppIconPride</key>
 			<dict>
 				<key>CFBundleIconFiles</key>
@@ -76,6 +85,16 @@
 		</dict>
 		<key>CFBundleAlternateIcons</key>
 		<dict>
+			<key>AppIconOG</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>AppIconOG60x60</string>
+					<string>AppIconOG76x76</string>
+				</array>
+				<key>UIPrerenderedIcon</key>
+				<false/>
+			</dict>
 			<key>AppIconPride</key>
 			<dict>
 				<key>CFBundleIconFiles</key>
