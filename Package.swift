@@ -44,6 +44,9 @@ let package = Package(
 			resources: [
 				.process("Strings"),
 				.copy("BundledAssets"),
+			],
+			linkerSettings: [
+				.unsafeFlags(["-Xlinker", "-platform_version", "-Xlinker", "ios", "-Xlinker", "16.0", "-Xlinker", "26.0"]),
 			]
 		),
 	]
