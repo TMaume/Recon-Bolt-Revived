@@ -15,66 +15,48 @@ struct LookupCell: View {
 	@ScaledMetric(relativeTo: .body) private var tagFieldWidth = 50
 	
 	var body: some View {
-		ZStack {
-			// this button is not visible but triggers when the cell is tapped—.onTapGesture breaks actual buttons in the cell
-			Button("cell tap trigger") {
-				print("cell tapped!")
-				focusedField = .gameName
-			}
-			.opacity(0)
-			
-			content
-		}
-		.fixedSize(horizontal: false, vertical: true)
-	}
-	
-	private var content: some View {
-		HStack {
-			HStack {
-				TextField(String(localized: "Name", comment: "Bookmark/Player List: lookup name placeholder"), text: $gameName)
-					.frame(maxWidth: maxNameFieldWidth)
-					.focused($focusedField, equals: .gameName)
-					.submitLabel(.next)
-					.onSubmit {
-						focusedField = .tagLine
-					}
-				
-				HStack {
-					Text("#", comment: "Bookmark/Player List: lookup text fields")
-						.foregroundStyle(.secondary)
-					
-					TextField(String(localized: "Tag", comment: "Bookmark/Player List: lookup tag placeholder"), text: $tagLine)
-						.frame(width: tagFieldWidth)
-						.focused($focusedField, equals: .tagLine)
-						.submitLabel(.search)
-						.onSubmit { lookUpPlayer() }
-				}
-				.onTapGesture {
+		HStack(spacing: 12) {
+			TextField(String(localized: "Name", comment: "Bookmark/Player List: lookup name placeholder"), text: $gameName)
+				.frame(maxWidth: maxNameFieldWidth)
+				.focused($focusedField, equals: .gameName)
+				.submitLabel(.next)
+				.onSubmit {
 					focusedField = .tagLine
 				}
-			}
-			.textInputAutocapitalization(.never)
-			.autocorrectionDisabled()
-			.opacity(isLoading ? 0.5 : 1)
 			
-			Spacer()
-			
-			Button {
-				lookUpPlayer()
-			} label: {
-				Label(String(localized: "Look Up", comment: "Bookmark/Player List: lookup button"), systemImage: "magnifyingglass")
+			HStack(spacing: 4) {
+				Text("#", comment: "Bookmark/Player List: lookup text fields")
+					.foregroundStyle(.secondary)
+				
+				TextField(String(localized: "Tag", comment: "Bookmark/Player List: lookup tag placeholder"), text: $tagLine)
+					.frame(width: tagFieldWidth)
+					.focused($focusedField, equals: .tagLine)
+					.submitLabel(.search)
+					.onSubmit { lookUpPlayer() }
 			}
-			.disabled(gameName.isEmpty || tagLine.isEmpty)
-			.fixedSize()
-			.overlay(alignment: .leading) {
-				if isLoading {
-					ProgressView()
+			.contentShape(Rectangle())
+			.onTapGesture {
+				focusedField = .tagLine
+			}
+			
+			Spacer(minLength: 8)
+			
+			if isLoading {
+				ProgressView()
+			} else {
+				Button {
+					lookUpPlayer()
+				} label: {
+					Image(systemName: "magnifyingglass")
 				}
+				.buttonStyle(.borderless)
+				.disabled(gameName.isEmpty || tagLine.isEmpty)
 			}
 		}
-		.aligningListRowSeparator()
+		.textInputAutocapitalization(.never)
+		.autocorrectionDisabled()
 		.disabled(isLoading)
-		.padding(.vertical, 8)
+		.frame(height: 28)
 	}
 	
 	private func lookUpPlayer() {
