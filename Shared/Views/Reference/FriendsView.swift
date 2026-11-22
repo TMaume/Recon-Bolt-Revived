@@ -1032,7 +1032,7 @@ struct ChatView: View {
 	}
 	
 	private var messages: [XMPPChatMessage] {
-		socialManager.messagesByJID[friend.jid] ?? []
+		socialManager.messages(for: friend.jid)
 	}
 	
 	var body: some View {
@@ -1041,15 +1041,22 @@ struct ChatView: View {
 			
 			if messages.isEmpty {
 				VStack(spacing: 10) {
-					Image(systemName: "bubble.left.and.bubble.right")
-						.font(.system(size: 42, weight: .light))
-						.foregroundStyle(.secondary)
-					Text("No Messages")
-						.font(.headline.weight(.bold))
-					Text("Send a message to start the conversation.")
-						.font(.subheadline)
-						.foregroundStyle(.secondary)
-						.multilineTextAlignment(.center)
+					if socialManager.isLoadingHistory(for: friend.jid) {
+						ProgressView()
+							.padding(.bottom, 4)
+						Text("Loading Messages...")
+							.font(.headline.weight(.bold))
+					} else {
+						Image(systemName: "bubble.left.and.bubble.right")
+							.font(.system(size: 42, weight: .light))
+							.foregroundStyle(.secondary)
+						Text("No Messages")
+							.font(.headline.weight(.bold))
+						Text("Send a message to start the conversation.")
+							.font(.subheadline)
+							.foregroundStyle(.secondary)
+							.multilineTextAlignment(.center)
+					}
 				}
 				.padding(32)
 			} else {
@@ -1151,33 +1158,48 @@ struct ChatView: View {
 	}
 	
 	private var chatPrincipalHeader: some View {
-		HStack(spacing: 9) {
-			PlayerCardImage.small(liveFriend.playerCardID)
-				.frame(width: 30, height: 30)
-				.background(Color.tertiaryGroupedBackground)
-				.clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-			
-			VStack(alignment: .leading, spacing: 1) {
-				HStack(spacing: 0) {
-					Text(liveFriend.gameName.isEmpty ? liveFriend.jid : liveFriend.gameName)
-						.font(.subheadline.weight(.bold))
-						.lineLimit(1)
-					if !liveFriend.tagLine.isEmpty {
-						Text("#\(liveFriend.tagLine)")
-							.font(.subheadline)
+		Button {
+			guard liveFriend.puuid != nil else { return }
+			showingProfile = true
+		} label: {
+			HStack(spacing: 9) {
+				PlayerCardImage.small(liveFriend.playerCardID)
+					.frame(width: 30, height: 30)
+					.background(Color.tertiaryGroupedBackground)
+					.clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+				
+				VStack(alignment: .leading, spacing: 1) {
+					HStack(spacing: 2) {
+						Text(liveFriend.gameName.isEmpty ? liveFriend.jid : liveFriend.gameName)
+							.font(.subheadline.weight(.bold))
+							.foregroundStyle(.primary)
+							.lineLimit(1)
+						if !liveFriend.tagLine.isEmpty {
+							Text("#\(liveFriend.tagLine)")
+								.font(.subheadline)
+								.foregroundStyle(.secondary)
+								.lineLimit(1)
+						}
+						if liveFriend.puuid != nil {
+							Image(systemName: "chevron.right")
+								.font(.caption2.weight(.semibold))
+								.foregroundStyle(.secondary)
+								.padding(.leading, 2)
+						}
+					}
+					
+					if let subtitle = chatStatusSubtitle {
+						Text(subtitle)
+							.font(.system(size: 11))
 							.foregroundStyle(.secondary)
 							.lineLimit(1)
 					}
 				}
-				
-				if let subtitle = chatStatusSubtitle {
-					Text(subtitle)
-						.font(.system(size: 11))
-						.foregroundStyle(.secondary)
-						.lineLimit(1)
-				}
 			}
+			.contentShape(Rectangle())
 		}
+		.buttonStyle(.plain)
+		.disabled(liveFriend.puuid == nil)
 	}
 	
 	private var chatStatusSubtitle: String? {
