@@ -98,7 +98,7 @@ struct MatchListView: View {
 		.withLocalData($user, id: userID, shouldAutoUpdate: true)
 		.withLocalData($matchList, id: userID, shouldAutoUpdate: true)
 		.withLocalData($summary, id: userID, shouldAutoUpdate: true)
-		.withLocalData($identity, id: userID)
+		.withLocalData($identity, id: userID, shouldAutoUpdate: true)
 		.anonymizing(additionally: shouldAnonymize(userID) ? .all : .none)
 		.navigationTitle(title)
 	}
@@ -116,7 +116,10 @@ struct MatchListView: View {
 		async let summaryUpdate: Void = load {
 			try await $0.fetchCareerSummary(for: userID, forceFetch: true)
 		}
-		_ = await (matchListUpdate, summaryUpdate)
+		async let identityUpdate: Void = load {
+			try await $0.fetchIdentity(for: userID, forceFetch: true)
+		}
+		_ = await (matchListUpdate, summaryUpdate, identityUpdate)
 	}
 	
 	func updateMatchList(update: @escaping (ValorantClient) -> (inout MatchList) async throws -> Void) async {

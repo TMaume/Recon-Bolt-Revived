@@ -43,8 +43,12 @@ extension MatchDetails: LocalDataAutoUpdatable {
 	}
 }
 
-extension Player.Identity: LocalDataStored {
+extension Player.Identity: LocalDataAutoUpdatable {
 	static let managerPath = \LocalDataProvider.playerIdentityManager as KeyPath
+	
+	static func autoUpdate(for id: ID, using client: ValorantClient) async throws {
+		try await client.fetchIdentity(for: id)
+	}
 }
 
 final class LocalDataProvider {
@@ -54,7 +58,7 @@ final class LocalDataProvider {
 	var careerSummaryManager = LocalDataManager<CareerSummary>(ageCausingAutoUpdate: .minutes(5))
 	var userManager = LocalDataManager<User>(ageCausingAutoUpdate: .hours(1))
 	var matchDetailsManager = LocalDataManager<MatchDetails>()
-	var playerIdentityManager = LocalDataManager<Player.Identity>()
+	var playerIdentityManager = LocalDataManager<Player.Identity>(ageCausingAutoUpdate: .minutes(5))
 	
 	private init() {}
 	
@@ -89,6 +93,20 @@ final class LocalDataProvider {
 	
 	static func dataFetched(_ party: Party) {
 		shared.store(party.members.map(\.identity), asOf: .now)
+	}
+	
+	static func dataFetched(_ loadout: Loadout) {
+		Task {
+			let existing = await shared.playerIdentityManager.cachedObject(for: loadout.subject)
+			let identity = Player.Identity(
+				id: loadout.subject,
+				cardID: loadout.identity.card,
+				titleID: loadout.identity.title,
+				accountLevel: existing?.accountLevel ?? 0,
+				isIncognito: loadout.isIncognito
+			)
+			await shared.playerIdentityManager.store(identity, asOf: .now)
+		}
 	}
 }
 
@@ -162,6 +180,29 @@ extension ValorantClient {
 	func fetchUsers(for ids: [User.ID]) async throws {
 		let manager = LocalDataProvider.shared.userManager
 		try await manager.fetchIfNecessary(ids, fetch: getUsers)
+	}
+	
+	func fetchIdentity(for userID: User.ID, forceFetch: Bool = false) async throws {
+		guard userID == self.userID else { return }
+		let manager = LocalDataProvider.shared.playerIdentityManager
+		let fetch: (User.ID) async throws -> Player.Identity = { [self] id in
+			async let loadout = getLoadout()
+			async let level = getAccountLevel()
+			let cached = await manager.cachedObject(for: id)
+			let resolvedLoadout = try await loadout
+			return Player.Identity(
+				id: id,
+				cardID: resolvedLoadout.identity.card,
+				titleID: resolvedLoadout.identity.title,
+				accountLevel: (try? await level) ?? cached?.accountLevel ?? 0,
+				isIncognito: resolvedLoadout.isIncognito
+			)
+		}
+		if forceFetch {
+			try await manager.store(fetch(userID), asOf: .now)
+		} else {
+			try await manager.fetchIfNecessary(for: userID, fetch: fetch)
+		}
 	}
 	
 	func fetchMatchDetails(for matchID: Match.ID) async throws {

@@ -174,7 +174,7 @@ private struct LoadoutInfo {
 	init(using client: ValorantClient) async throws {
 		async let loadout = client.getLoadout()
 		async let inventory = client.getInventory()
-		self.loadout = try await loadout
+		self.loadout = try await loadout <- LocalDataProvider.dataFetched
 		self.inventory = try await inventory
 	}
 }
