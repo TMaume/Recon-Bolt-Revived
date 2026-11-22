@@ -148,7 +148,7 @@ private struct LiquidGlassTabBarModifier: ViewModifier {
 	func body(content: Content) -> some View {
 		if #available(iOS 26.0, *) {
 			content
-				.tabBarMinimizeBehavior(.onScrollDown)
+				.tabBarMinimizeBehavior(.never)
 		} else {
 			content
 		}
