@@ -90,7 +90,7 @@ struct MatchCell: View {
 						
 						let myself = matchDetails?.players.firstElement(withID: userID)
 						if let agentID = myself?.agentID {
-							AgentImage.killfeedPortrait(agentID)
+							AgentImage.killfeedPortrait(agentID, teamColor: myself?.teamID.color)
 								.scaleEffect(x: -1)
 								.shadow(color: .black, radius: 4, x: 0, y: 0)
 						}

@@ -40,7 +40,8 @@ struct ScoreboardView: View {
 		
 		ForEach(Array(data.rankedTeams.enumerated()), id: \.element.id) { index, team in
 			let teamPlayers = (playersByTeam[team.id] ?? []).sorted { $0.score > $1.score }
-			let placement = PlacementFormatter.ordinal(index + 1)
+			let placementRank = team.placement ?? (index + 1)
+			let placement = PlacementFormatter.ordinal(placementRank)
 			let teamColor = data.relativeColor(of: team.id) ?? .valorantRed
 			
 			if hasGroupedTeams {
@@ -60,6 +61,10 @@ struct ScoreboardView: View {
 						
 						if team.pointCount > 0 {
 							Text("\(team.pointCount) pts")
+								.font(.caption.monospacedDigit())
+								.foregroundStyle(.secondary)
+						} else if let health = team.health, health.starting > 0 {
+							Text("\(health.ending)/\(health.starting) HP")
 								.font(.caption.monospacedDigit())
 								.foregroundStyle(.secondary)
 						}
@@ -123,7 +128,7 @@ struct ScoreboardRowView: View {
 			
 			ZStack {
 				if let agentID = player.agentID {
-					AgentImage.icon(agentID, outlineRadius: 1)
+					AgentImage.icon(agentID, outlineRadius: 1, teamColor: data.relativeColor(of: player.teamID))
 				} else {
 					Image(systemName: "eye")
 						.frame(maxWidth: .infinity, maxHeight: .infinity)

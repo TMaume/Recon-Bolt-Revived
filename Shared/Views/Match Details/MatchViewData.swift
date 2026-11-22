@@ -42,7 +42,7 @@ struct MatchViewData {
 	}
 	
 	func placement(of teamID: Team.ID) -> Int? {
-		rankedTeams.firstIndex { $0.id == teamID }.map { $0 + 1 }
+		details.placement(of: teamID)
 	}
 	
 	func relativeColor(of other: Player) -> Color? {

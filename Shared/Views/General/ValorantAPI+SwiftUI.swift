@@ -3,8 +3,20 @@ import ValorantAPI
 import ArrayBuilder
 
 extension Team.ID {
+	private static let numberedTeamColors: [Color] = [
+		.valorantRed,
+		.orange,
+		.green,
+		.mint,
+		.cyan,
+		.valorantBlue,
+		.purple,
+		.pink,
+	]
+	
 	var color: Color? {
-		switch rawID.lowercased() {
+		let lowercased = rawID.lowercased()
+		switch lowercased {
 		case "blue":
 			return .valorantBlue
 		case "red":
@@ -26,6 +38,13 @@ extension Team.ID {
 		case "neutral":
 			return .gray
 		default:
+			if
+				lowercased.hasPrefix("team_"),
+				let number = Int(lowercased.dropFirst("team_".count)),
+				number > 0
+			{
+				return Self.numberedTeamColors[(number - 1) % Self.numberedTeamColors.count]
+			}
 			return nil
 		}
 	}

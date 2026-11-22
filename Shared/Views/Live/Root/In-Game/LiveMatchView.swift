@@ -97,7 +97,7 @@ struct LiveMatchView: View {
 			
 			HStack {
 				if let agentID = player.agentID {
-					AgentImage.icon(agentID, outlineRadius: 1.5)
+					AgentImage.icon(agentID, outlineRadius: 1.5, teamColor: resolvedTeamColor)
 						.frame(width: iconSize, height: iconSize)
 						.mask(Circle())
 						.background(Circle().fill(relativeColor).opacity(0.5).padding(2))

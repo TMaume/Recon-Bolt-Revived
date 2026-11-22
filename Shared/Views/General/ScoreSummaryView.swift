@@ -15,8 +15,9 @@ struct ScoreSummaryView: View {
 				let rankIndex = ranked.firstIndex(where: { $0.id == ownTeamID })
 			{
 				let team = ranked[rankIndex]
-				Text(PlacementFormatter.ordinal(rankIndex + 1))
-					.foregroundColor(team.won || rankIndex == 0 ? .valorantBlue : .primary)
+				let rank = (team.placement ?? 0) > 0 ? team.placement! : rankIndex + 1
+				Text(PlacementFormatter.ordinal(rank))
+					.foregroundColor(team.won || rank == 1 ? .valorantBlue : .primary)
 			} else if let winner = ranked.first {
 				Text(verbatim: "\(winner.pointCount)")
 					.foregroundColor(.valorantBlue)
