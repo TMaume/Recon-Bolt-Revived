@@ -269,8 +269,7 @@ final class ImageManager: ObservableObject {
 				let rect = CGRect(origin: .zero, size: size)
 				image.draw(in: rect)
 				UIColor.white.setFill()
-				ctx.cgContext.setBlendMode(.sourceIn)
-				ctx.fill(rect)
+				ctx.fill(rect, blendMode: .sourceIn)
 			}
 			let rendered = UIGraphicsImageRenderer(size: size, format: format).image { _ in
 				let rect = CGRect(origin: .zero, size: size)
@@ -281,7 +280,7 @@ final class ImageManager: ObservableObject {
 				}
 				image.draw(in: rect)
 			}
-			return rendered.preparingForDisplay() ?? rendered
+			return rendered
 		}
 		
 		func reset() {
