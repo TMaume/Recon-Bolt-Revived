@@ -51,6 +51,19 @@ struct ScoreboardView: View {
 							.font(.subheadline.weight(.bold))
 							.foregroundColor(teamColor)
 						
+						if let mascotAsset = team.id.gauntletMascotAssetName {
+							Image.bundledAsset(mascotAsset)
+								.resizable()
+								.scaledToFit()
+								.frame(width: 22, height: 22)
+						}
+						
+						if let teamName = team.id.gauntletDisplayName {
+							Text(verbatim: teamName)
+								.font(.subheadline.weight(.semibold))
+								.foregroundColor(teamColor)
+						}
+						
 						if team.id == data.myself?.teamID {
 							Text("Your Team", comment: "Scoreboard: badge on user's team in multi-team modes")
 								.font(.caption.weight(.semibold))
@@ -116,6 +129,7 @@ struct ScoreboardRowView: View {
 			.frame(width: 1)
 			.blendMode(.destinationOut)
 		let relativeColor = data.relativeColor(of: player)
+		let rowTeamColor = (data.isMultiTeam ? data.relativeColor(of: player.teamID) : nil) ?? relativeColor
 		
 		HStack(spacing: Self.padding) {
 			if let placement {
@@ -128,14 +142,19 @@ struct ScoreboardRowView: View {
 			
 			ZStack {
 				if let agentID = player.agentID {
-					AgentImage.icon(agentID, outlineRadius: 1, teamColor: data.relativeColor(of: player.teamID))
+					AgentImage.icon(
+						agentID,
+						outlineRadius: 1,
+						teamID: player.teamID,
+						isOVariant: data.isGauntletOVariant(for: player)
+					)
 				} else {
 					Image(systemName: "eye")
 						.frame(maxWidth: .infinity, maxHeight: .infinity)
 				}
 			}
 			.aspectRatio(1, contentMode: .fit)
-			.background(relativeColor.opacity(0.5))
+			.background(rowTeamColor.opacity(0.5))
 			.compositingGroup()
 			.opacity(highlight.shouldFade(player.id) ? 0.5 : 1)
 			
@@ -172,7 +191,7 @@ struct ScoreboardRowView: View {
 			relativeColor
 				.frame(width: Self.padding)
 		}
-		.background(relativeColor.opacity(0.25))
+		.background(rowTeamColor.opacity(data.isMultiTeam ? 0.34 : 0.25))
 		.frame(height: 44)
 		.cornerRadius(Self.padding)
 		.compositingGroup() // for the destination-out blending

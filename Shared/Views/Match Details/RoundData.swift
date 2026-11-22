@@ -157,6 +157,8 @@ struct DisplayedPlayerLocation: Identifiable {
 	var angle: Double?
 	var relativeColor: Color?
 	var agentID: Agent.ID?
+	var teamID: Team.ID?
+	var isOVariant = true
 	
 	func interpolated(towards end: Self, progress: Double) -> Self {
 		self <- { $0.interpolate(towards: end, progress: progress) }
@@ -198,6 +200,8 @@ extension DisplayedPlayerLocation {
 		self.angle = location.angle
 		self.relativeColor = matchData.relativeColor(of: player)
 		self.agentID = player.agentID
+		self.teamID = player.teamID
+		self.isOVariant = matchData.isGauntletOVariant(for: player)
 	}
 }
 

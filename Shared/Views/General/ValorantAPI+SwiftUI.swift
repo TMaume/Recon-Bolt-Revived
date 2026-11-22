@@ -3,16 +3,68 @@ import ValorantAPI
 import ArrayBuilder
 
 extension Team.ID {
-	private static let numberedTeamColors: [Color] = [
-		.valorantRed,
-		.orange,
-		.green,
-		.mint,
-		.cyan,
-		.valorantBlue,
-		.purple,
-		.pink,
+	static let gauntletPalette: [Color] = [
+		Color(red: 190 / 255, green: 56 / 255, blue: 255 / 255), // 1: Purple Corgis
+		Color(red: 24 / 255, green: 226 / 255, blue: 255 / 255), // 2: Cyan Sloths
+		Color(red: 255 / 255, green: 110 / 255, blue: 18 / 255), // 3: Orange Bears
+		Color(red: 52 / 255, green: 108 / 255, blue: 255 / 255), // 4: Blue Penguins
+		Color(red: 255 / 255, green: 45 / 255, blue: 95 / 255),  // 5: Red Elephants
+		Color(red: 95 / 255, green: 232 / 255, blue: 22 / 255),  // 6: Green Octopi
+		Color(red: 255 / 255, green: 65 / 255, blue: 235 / 255), // 7: Pink Rabbits
+		Color(red: 255 / 255, green: 206 / 255, blue: 18 / 255), // 8: Yellow Squirrels
 	]
+	
+	private static let gauntletTeamNames: [String] = [
+		"Purple Corgis",
+		"Cyan Sloths",
+		"Orange Bears",
+		"Blue Penguins",
+		"Red Elephants",
+		"Green Octopi",
+		"Pink Rabbits",
+		"Yellow Squirrels",
+	]
+	
+	/// 1-based Gauntlet team slot (`1...8`) when `rawID` is `"Team_1"`..`"Team_N"`.
+	var gauntletSlotIndex: Int? {
+		let lowercased = rawID.lowercased()
+		guard
+			lowercased.hasPrefix("team_"),
+			let number = Int(lowercased.dropFirst("team_".count)),
+			number > 0
+		else { return nil }
+		return ((number - 1) % Self.gauntletPalette.count) + 1
+	}
+	
+	var gauntletDisplayName: String? {
+		guard let slot = gauntletSlotIndex else { return nil }
+		return Self.gauntletTeamNames[slot - 1]
+	}
+	
+	var gauntletMascotAssetName: String? {
+		guard let slot = gauntletSlotIndex else { return nil }
+		return "gauntlet/mascot_\(slot)"
+	}
+	
+	func gauntletRoboAssetName(isOVariant: Bool = true, isKillfeed: Bool = false) -> String? {
+		let slot = gauntletSlotIndex ?? 1
+		let variant = isOVariant ? "o" : "x"
+		let suffix = isKillfeed ? "_killfeed" : ""
+		return "gauntlet/robo_\(slot)_\(variant)\(suffix)"
+	}
+	
+	static func isGauntletOVariant(for playerID: Player.ID, teamID: Team.ID, in players: [Player]) -> Bool {
+		let teammates = players
+			.filter { $0.teamID == teamID }
+			.sorted {
+				if $0.score != $1.score {
+					return $0.score > $1.score
+				}
+				return $0.id.description < $1.id.description
+			}
+		guard let index = teammates.firstIndex(where: { $0.id == playerID }) else { return true }
+		return index % 2 == 0
+	}
 	
 	var color: Color? {
 		let lowercased = rawID.lowercased()
@@ -22,28 +74,24 @@ extension Team.ID {
 		case "red":
 			return .valorantRed
 		case "green":
-			return .green
+			return Self.gauntletPalette[5]
 		case "yellow":
-			return .yellow
+			return Self.gauntletPalette[7]
 		case "purple":
-			return .purple
+			return Self.gauntletPalette[0]
 		case "orange":
-			return .orange
+			return Self.gauntletPalette[2]
 		case "pink", "magenta":
-			return .pink
+			return Self.gauntletPalette[6]
 		case "teal":
 			return .teal
 		case "cyan":
-			return .cyan
+			return Self.gauntletPalette[1]
 		case "neutral":
 			return .gray
 		default:
-			if
-				lowercased.hasPrefix("team_"),
-				let number = Int(lowercased.dropFirst("team_".count)),
-				number > 0
-			{
-				return Self.numberedTeamColors[(number - 1) % Self.numberedTeamColors.count]
+			if let slot = gauntletSlotIndex {
+				return Self.gauntletPalette[slot - 1]
 			}
 			return nil
 		}
@@ -51,13 +99,7 @@ extension Team.ID {
 }
 
 extension Color {
-	private static let multiTeamPalette: [Color] = [
-		.valorantRed,
-		.orange,
-		.purple,
-		.green,
-		.pink,
-		.cyan,
+	private static let multiTeamPalette: [Color] = Team.ID.gauntletPalette + [
 		.indigo,
 		.mint,
 		.brown,

@@ -35,7 +35,7 @@ struct EventMap: View {
 					.fixedSize()
 					.background {
 						if isZoomedIn, let agentID = location.agentID {
-							AgentImage.icon(agentID, teamColor: location.relativeColor)
+							AgentImage.icon(agentID, teamID: location.teamID, isOVariant: location.isOVariant)
 								.frame(width: 24, height: 24)
 								.offset(x: 0, y: -24)
 						}

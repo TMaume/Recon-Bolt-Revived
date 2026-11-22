@@ -17,28 +17,22 @@ extension AgentImage {
 		)
 	}
 	
-	/// Tints the shared Gauntlet (`AbilityDraftAgent`) robot icon with the team's color while preserving any outline.
+	/// Displays the extracted in-game Gauntlet (`AbilityDraftAgent`) `"O"` / `"X"` Robo-Agent portrait for the player's team.
 	@ViewBuilder
-	static func icon(_ id: Agent.ID, outlineRadius: CGFloat? = nil, teamColor: Color?) -> some View {
-		if id == .abilityDraftAgent, let teamColor {
-			ZStack {
-				if let outlineRadius {
-					Self(
-						id: id,
-						renderingMode: .template,
-						aspectRatio: 1,
-						outlineRadius: outlineRadius,
-						shouldLoadImmediately: true,
-						getImage: \.displayIcon
-					)
-					.foregroundColor(.white)
-				}
-				icon(id)
-					.grayscale(1)
-					.contrast(1.2)
-					.brightness(0.08)
-					.colorMultiply(teamColor)
-			}
+	static func icon(
+		_ id: Agent.ID,
+		outlineRadius: CGFloat? = nil,
+		teamID: Team.ID? = nil,
+		isOVariant: Bool = true
+	) -> some View {
+		if
+			id == .abilityDraftAgent,
+			let assetName = (teamID ?? Team.ID(rawID: "Team_1")).gauntletRoboAssetName(isOVariant: isOVariant, isKillfeed: false),
+			let uiImage = UIImage.bundledAsset(named: assetName)
+		{
+			Image(uiImage: uiImage)
+				.resizable()
+				.scaledToFit()
 		} else {
 			icon(id, outlineRadius: outlineRadius)
 		}
@@ -53,13 +47,15 @@ extension AgentImage {
 	}
 	
 	@ViewBuilder
-	static func killfeedPortrait(_ id: Agent.ID, teamColor: Color?) -> some View {
-		if id == .abilityDraftAgent, let teamColor {
-			killfeedPortrait(id)
-				.grayscale(1)
-				.contrast(1.2)
-				.brightness(0.08)
-				.colorMultiply(teamColor)
+	static func killfeedPortrait(_ id: Agent.ID, teamID: Team.ID?, isOVariant: Bool = true) -> some View {
+		if
+			id == .abilityDraftAgent,
+			let assetName = (teamID ?? Team.ID(rawID: "Team_1")).gauntletRoboAssetName(isOVariant: isOVariant, isKillfeed: true),
+			let uiImage = UIImage.bundledAsset(named: assetName)
+		{
+			Image(uiImage: uiImage)
+				.resizable()
+				.scaledToFit()
 		} else {
 			killfeedPortrait(id)
 		}

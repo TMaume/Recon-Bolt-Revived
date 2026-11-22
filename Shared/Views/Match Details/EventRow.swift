@@ -53,7 +53,12 @@ struct EventRow: View, Animatable {
 			if damageType == .bomb {
 				iconImage(name: "Spike")
 			} else if let actor = matchData.player(event.event.actor), let agentID = actor.agentID {
-				AgentImage.icon(agentID, outlineRadius: 1, teamColor: matchData.relativeColor(of: actor.teamID))
+				AgentImage.icon(
+					agentID,
+					outlineRadius: 1,
+					teamID: actor.teamID,
+					isOVariant: matchData.isGauntletOVariant(for: actor)
+				)
 			}
 		}
 		
@@ -94,7 +99,12 @@ struct EventRow: View, Animatable {
 		if let victim = matchData.player(kill.victim) {
 			icon {
 				if let agentID = victim.agentID {
-					AgentImage.icon(agentID, outlineRadius: 1, teamColor: matchData.relativeColor(of: victim.teamID))
+					AgentImage.icon(
+						agentID,
+						outlineRadius: 1,
+						teamID: victim.teamID,
+						isOVariant: matchData.isGauntletOVariant(for: victim)
+					)
 						.background(matchData.relativeColor(of: victim))
 				}
 			}
@@ -105,7 +115,12 @@ struct EventRow: View, Animatable {
 	private func bombEventContent(for bombEvent: BombEvent) -> some View {
 		icon {
 			if let actor = matchData.player(event.event.actor), let agentID = actor.agentID {
-				AgentImage.icon(agentID, outlineRadius: 1, teamColor: matchData.relativeColor(of: actor.teamID))
+				AgentImage.icon(
+					agentID,
+					outlineRadius: 1,
+					teamID: actor.teamID,
+					isOVariant: matchData.isGauntletOVariant(for: actor)
+				)
 			}
 		}
 		

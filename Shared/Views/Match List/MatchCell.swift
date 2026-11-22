@@ -89,8 +89,11 @@ struct MatchCell: View {
 						.frame(maxWidth: .infinity, alignment: .leading)
 						
 						let myself = matchDetails?.players.firstElement(withID: userID)
-						if let agentID = myself?.agentID {
-							AgentImage.killfeedPortrait(agentID, teamColor: myself?.teamID.color)
+						if let myself, let agentID = myself.agentID {
+							let isOVariant = matchDetails.map {
+								Team.ID.isGauntletOVariant(for: myself.id, teamID: myself.teamID, in: $0.players)
+							} ?? true
+							AgentImage.killfeedPortrait(agentID, teamID: myself.teamID, isOVariant: isOVariant)
 								.scaleEffect(x: -1)
 								.shadow(color: .black, radius: 4, x: 0, y: 0)
 						}

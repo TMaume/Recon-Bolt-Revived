@@ -151,7 +151,12 @@ struct KillBreakdownView: View {
 			
 			Group {
 				if let agentID = player.agentID {
-					AgentImage.icon(agentID, outlineRadius: 1, teamColor: data.relativeColor(of: player.teamID))
+					AgentImage.icon(
+						agentID,
+						outlineRadius: 1,
+						teamID: player.teamID,
+						isOVariant: data.isGauntletOVariant(for: player)
+					)
 						.aspectRatio(1, contentMode: .fit)
 						.fixedSize(horizontal: false, vertical: true)
 				} else {

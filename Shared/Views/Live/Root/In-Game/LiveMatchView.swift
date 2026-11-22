@@ -53,16 +53,26 @@ struct LiveMatchView: View {
 			)
 			
 			VStack(spacing: 10) {
-				ForEach(allyTeam) {
-					PlayerView(player: $0, ownPlayer: ownPlayer, teamColor: teamColors[$0.teamID] ?? .valorantBlue)
+				ForEach(Array(allyTeam.enumerated()), id: \.element.id) { index, player in
+					PlayerView(
+						player: player,
+						ownPlayer: ownPlayer,
+						teamColor: teamColors[player.teamID] ?? .valorantBlue,
+						isOVariant: index % 2 == 0
+					)
 				}
 				
 				ForEach(enemyTeams, id: \.key) { teamID, team in
 					Divider()
 						.padding(.vertical, 5)
 					
-					ForEach(team) {
-						PlayerView(player: $0, ownPlayer: ownPlayer, teamColor: teamColors[$0.teamID] ?? .valorantRed)
+					ForEach(Array(team.enumerated()), id: \.element.id) { index, player in
+						PlayerView(
+							player: player,
+							ownPlayer: ownPlayer,
+							teamColor: teamColors[player.teamID] ?? .valorantRed,
+							isOVariant: index % 2 == 0
+						)
 					}
 				}
 			}
@@ -74,16 +84,23 @@ struct LiveMatchView: View {
 		let player: LiveGameInfo.PlayerInfo
 		let ownPlayer: LiveGameInfo.PlayerInfo
 		var teamColor: Color? = nil
+		var isOVariant = true
 		
 		@LocalData var playerUser: User?
 		@LocalData var summary: CareerSummary?
 		@Environment(\.assets) private var assets
 		@Environment(\.shouldAnonymize) private var shouldAnonymize
 		
-		init(player: LiveGameInfo.PlayerInfo, ownPlayer: LiveGameInfo.PlayerInfo, teamColor: Color? = nil) {
+		init(
+			player: LiveGameInfo.PlayerInfo,
+			ownPlayer: LiveGameInfo.PlayerInfo,
+			teamColor: Color? = nil,
+			isOVariant: Bool = true
+		) {
 			self.player = player
 			self.ownPlayer = ownPlayer
 			self.teamColor = teamColor
+			self.isOVariant = isOVariant
 			self._playerUser = .init(id: player.id)
 			self._summary = .init(id: player.id)
 		}
@@ -97,7 +114,12 @@ struct LiveMatchView: View {
 			
 			HStack {
 				if let agentID = player.agentID {
-					AgentImage.icon(agentID, outlineRadius: 1.5, teamColor: resolvedTeamColor)
+					AgentImage.icon(
+						agentID,
+						outlineRadius: 1.5,
+						teamID: player.teamID,
+						isOVariant: isOVariant
+					)
 						.frame(width: iconSize, height: iconSize)
 						.mask(Circle())
 						.background(Circle().fill(relativeColor).opacity(0.5).padding(2))

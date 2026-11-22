@@ -45,6 +45,10 @@ struct MatchViewData {
 		details.placement(of: teamID)
 	}
 	
+	func isGauntletOVariant(for player: Player) -> Bool {
+		Team.ID.isGauntletOVariant(for: player.id, teamID: player.teamID, in: details.players)
+	}
+	
 	func relativeColor(of other: Player) -> Color? {
 		let teamColor = relativeColor(of: other.teamID) ?? .valorantBlue
 		return other.id == myself?.id ? .valorantSelf : teamColor
