@@ -31,6 +31,15 @@ struct ScoreboardView: View {
 			}
 			.buttonStyle(.bordered)
 		}
+		.task(id: data.details.id) {
+			let missingIDs = data.details.players
+				.filter(\.gameName.isEmpty)
+				.map(\.id)
+			guard !missingIDs.isEmpty else { return }
+			await load {
+				try await $0.fetchUsers(for: missingIDs)
+			}
+		}
 	}
 	
 	@ViewBuilder
@@ -120,6 +129,7 @@ struct ScoreboardRowView: View {
 	var placement: String? = nil
 	@Binding var highlight: PlayerHighlightInfo
 	
+	@LocalData var playerUser: User?
 	@LocalData var summary: CareerSummary?
 	
 	@Environment(\.shouldAnonymize) private var shouldAnonymize
@@ -198,17 +208,24 @@ struct ScoreboardRowView: View {
 		.onTapGesture {
 			highlight.switchHighlight(to: player)
 		}
+		.withLocalData($playerUser, id: player.id)
 		.withLocalData($summary, id: player.id)
 	}
 	
 	@ViewBuilder
 	var identitySection: some View {
+		let resolvedName = !player.gameName.isEmpty
+			? player.gameName
+			: playerUser.flatMap { !$0.gameName.isEmpty ? $0.gameName : nil }
 		Group {
 			if shouldAnonymize(player.id) {
 				Text("Player")
 					.foregroundStyle(.secondary)
+			} else if let resolvedName {
+				Text(resolvedName)
 			} else {
-				Text(player.gameName)
+				Text("Player")
+					.foregroundStyle(.secondary)
 			}
 		}
 		.font(.body.weight(
@@ -264,6 +281,7 @@ extension ScoreboardRowView {
 	init(player: Player, data: MatchViewData, placement: String? = nil, highlight: Binding<PlayerHighlightInfo>) {
 		self.init(
 			player: player, data: data, placement: placement, highlight: highlight,
+			playerUser: .init(id: player.id),
 			summary: .init(id: player.id)
 		)
 	}

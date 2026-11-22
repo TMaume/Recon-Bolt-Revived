@@ -208,8 +208,13 @@ extension ValorantClient {
 	func fetchMatchDetails(for matchID: Match.ID) async throws {
 		let manager = LocalDataProvider.shared.matchDetailsManager
 		try await manager.fetchIfNecessary(for: matchID) {
-			try await getMatchDetails(matchID: $0)
+			let details = try await getMatchDetails(matchID: $0)
 				<- LocalDataProvider.dataFetched
+			let missingUserIDs = details.players.filter(\.gameName.isEmpty).map(\.id)
+			if !missingUserIDs.isEmpty {
+				try? await fetchUsers(for: missingUserIDs)
+			}
+			return details
 		}
 	}
 	
