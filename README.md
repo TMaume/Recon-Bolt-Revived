@@ -4,7 +4,7 @@
 
 # Recon Bolt Revived
 
-**Recon Bolt** was a popular open-source iOS companion app for **Valorant** originally created in **October 2022**. Built with SwiftUI, it started as a way to inspect hidden competitive RR changes and quickly grew into a full-featured mobile companion allowing players to:
+**Recon Bolt** was a popular open-source iOS companion app for **Valorant** originally created in **October 2022** by **[Julian Dunskus (juliand665)](https://juliand665.com/)**. Built with SwiftUI, it started as a way to inspect hidden competitive RR changes and quickly grew into a full-featured mobile companion allowing players to:
 
 - **Track Career & Match History:** View competitive rank progress, RR changes, full match scoreboards, kill timelines, 2D round maps, and hit distribution breakdowns.
 - **Analyze Detailed Statistics:** Explore playtime by mode/premade, headshot percentages by weapon, and win rates across maps, acts, and sides.
@@ -83,7 +83,9 @@ This repository brings **Recon Bolt back to life** ([`Recon-Bolt-Revived`](https
 </p>
 
 
-## Thanks
+## Credits & Thanks
+
+Recon Bolt and ValorantAPI were originally created by **[Julian Dunskus (juliand665)](https://juliand665.com/)** ([GitHub](https://github.com/juliand665)).
 
 This project would not have been possible (or was significantly eased by) some prior work:
 
