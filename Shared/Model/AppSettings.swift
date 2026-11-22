@@ -9,7 +9,7 @@ final class AppSettings: ObservableObject {
 	@AppStorage("AppSettings.customAccentColor")
 	var customAccentColorComponents = ""
 	
-	// Interface settings (Valpaw parity)
+	// Interface settings
 	@AppStorage("LiveGameBox.shouldAutoShow")
 	var autoOpenMatchDetails = false
 	
@@ -59,27 +59,63 @@ final class AppSettings: ObservableObject {
 		guard parts.count == 3 else {
 			return Self.defaultAccentColor
 		}
-		return Color(red: parts[0], green: parts[1], blue: parts[2])
+		return Self.strictSRGBColor(red: parts[0], green: parts[1], blue: parts[2])
 	}
 	
 	var accentColorBinding: Binding<Color> {
 		Binding(
-			get: { self.effectiveAccentColor },
-			set: { newValue in
-				let uiColor = UIColor(newValue)
-				var red: CGFloat = 0
-				var green: CGFloat = 0
-				var blue: CGFloat = 0
-				var alpha: CGFloat = 0
-				if uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
-					self.customAccentColorComponents = "\(Double(red)),\(Double(green)),\(Double(blue))"
-				} else if let srgb = uiColor.cgColor.converted(to: .sRGBSpace, intent: .defaultIntent, options: nil),
-				          let components = srgb.components, components.count >= 3 {
-					self.customAccentColorComponents = "\(Double(components[0])),\(Double(components[1])),\(Double(components[2]))"
+			get: {
+				if self.hasCustomAccentColor {
+					return self.effectiveAccentColor
 				}
+				let (r, g, b) = Self.clampedSRGBComponents(from: Self.defaultAccentColor)
+				return Self.strictSRGBColor(red: r, green: g, blue: b)
+			},
+			set: { newValue in
+				let (r, g, b) = Self.clampedSRGBComponents(from: newValue)
+				self.customAccentColorComponents = "\(r),\(g),\(b)"
 				self.objectWillChange.send()
 			}
 		)
+	}
+	
+	private static func clampedSRGBComponents(from color: Color) -> (Double, Double, Double) {
+		let cgColor = UIColor(color).cgColor
+		if let srgbSpace = CGColorSpace(name: CGColorSpace.sRGB),
+		   let converted = cgColor.converted(to: srgbSpace, intent: .defaultIntent, options: nil),
+		   let components = converted.components,
+		   components.count >= 3
+		{
+			return (
+				min(max(Double(components[0]), Double(0)), Double(1)),
+				min(max(Double(components[1]), Double(0)), Double(1)),
+				min(max(Double(components[2]), Double(0)), Double(1))
+			)
+		}
+		var red: CGFloat = 0
+		var green: CGFloat = 0
+		var blue: CGFloat = 0
+		var alpha: CGFloat = 0
+		if UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
+			return (
+				min(max(Double(red), Double(0)), Double(1)),
+				min(max(Double(green), Double(0)), Double(1)),
+				min(max(Double(blue), Double(0)), Double(1))
+			)
+		}
+		return (Double(1), Double(0), Double(0.311))
+	}
+	
+	private static func strictSRGBColor(red: Double, green: Double, blue: Double) -> Color {
+		let r = min(max(red, Double(0)), Double(1))
+		let g = min(max(green, Double(0)), Double(1))
+		let b = min(max(blue, Double(0)), Double(1))
+		if let space = CGColorSpace(name: CGColorSpace.sRGB),
+		   let cgColor = CGColor(colorSpace: space, components: [CGFloat(r), CGFloat(g), CGFloat(b), 1])
+		{
+			return Color(cgColor: cgColor)
+		}
+		return Color(.sRGB, red: r, green: g, blue: b, opacity: 1)
 	}
 	
 	var matchRetentionLabel: String {

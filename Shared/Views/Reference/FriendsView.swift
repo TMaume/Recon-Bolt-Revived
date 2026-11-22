@@ -13,6 +13,8 @@ struct FriendsView: View {
 	@State private var friendTag = ""
 	@State private var actionError: String?
 	@State private var showingChanges = false
+	@State private var contextChatFriend: XMPPFriend?
+	@State private var contextProfileUserID: User.ID?
 	
 	private var client: ValorantClient? {
 		accountManager.activeAccount?.client
@@ -53,9 +55,28 @@ struct FriendsView: View {
 		.navigationTitle("Friends")
 		.navigationBarTitleDisplayMode(.inline)
 		.background(
-			NavigationLink("", isActive: $showingChanges) {
-				FriendListChangesView()
+			HStack {
+				NavigationLink("", isActive: $showingChanges) {
+					FriendListChangesView()
+				}
+				NavigationLink("", isActive: Binding(
+					get: { contextChatFriend != nil },
+					set: { if !$0 { contextChatFriend = nil } }
+				)) {
+					if let friend = contextChatFriend {
+						ChatView(friend: friend)
+					}
+				}
+				NavigationLink("", isActive: Binding(
+					get: { contextProfileUserID != nil },
+					set: { if !$0 { contextProfileUserID = nil } }
+				)) {
+					if let userID = contextProfileUserID {
+						MatchListView(userID: userID)
+					}
+				}
 			}
+			.frame(width: 0, height: 0)
 			.hidden()
 		)
 		.toolbar {
@@ -674,14 +695,14 @@ struct FriendsView: View {
 		.buttonStyle(.plain)
 		.contextMenu {
 			if opensProfileDirectly {
-				NavigationLink {
-					ChatView(friend: friend)
+				Button {
+					contextChatFriend = friend
 				} label: {
 					Label("Open Chat", systemImage: "message")
 				}
 			} else if let puuid = friend.puuid {
-				NavigationLink {
-					MatchListView(userID: puuid)
+				Button {
+					contextProfileUserID = puuid
 				} label: {
 					Label("Open Profile", systemImage: "person.crop.circle")
 				}
@@ -921,7 +942,7 @@ private struct PresenceBadgeView: View {
 	}
 }
 
-// MARK: - Valpaw-style Chat View
+// MARK: - Friend Chat View
 
 struct ChatView: View {
 	let friend: XMPPFriend

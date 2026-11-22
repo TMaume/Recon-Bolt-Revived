@@ -123,6 +123,18 @@ struct SystemSettingsView: View {
 					}
 					
 					SettingsFooter("If your widgets appear to be malfunctioning, click this button to request an immediate refresh from iOS.")
+					
+					HStack(alignment: .top, spacing: 10) {
+						Image(systemName: "exclamationmark.triangle.fill")
+							.foregroundStyle(.orange)
+							.font(.subheadline)
+						Text("Widgets are not included in this build and could not be tested without a paid Apple Developer account. They will not work without one (App Groups and multiple extensions require a paid account).")
+							.font(.footnote)
+							.foregroundStyle(.secondary)
+					}
+					.padding(12)
+					.frame(maxWidth: .infinity, alignment: .leading)
+					.background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 				}
 				
 				if let activeAccount = accountManager.activeAccount {

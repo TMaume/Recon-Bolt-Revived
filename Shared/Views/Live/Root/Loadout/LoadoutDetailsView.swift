@@ -8,6 +8,7 @@ struct LoadoutDetailsView: View {
 	
 	@LocalData private var summary: CareerSummary?
 	@LocalData private var user: User?
+	@LocalData private var identity: Player.Identity?
 	@EnvironmentObject private var presetManager: LoadoutPresetManager
 	@Environment(\.valorantLoad) private var load
 	@Environment(\.assets) private var assets
@@ -17,6 +18,7 @@ struct LoadoutDetailsView: View {
 	@State private var activeShareCard: LoadoutShareCardKind?
 	@State private var isRandomizing = false
 	@State private var actRankHiddenOverride: Bool?
+	@State private var fetchedAccountLevel: Int?
 	
 	init(loadout: Loadout, inventory: Inventory) {
 		self.fetchedLoadout = loadout
@@ -24,6 +26,11 @@ struct LoadoutDetailsView: View {
 		self.inventory = inventory
 		self._summary = LocalData(id: loadout.subject)
 		self._user = LocalData(id: loadout.subject)
+		self._identity = LocalData(id: loadout.subject)
+	}
+	
+	private var resolvedAccountLevel: Int {
+		max(identity?.accountLevel ?? 0, fetchedAccountLevel ?? 0)
 	}
 	
 	var body: some View {
@@ -39,9 +46,14 @@ struct LoadoutDetailsView: View {
 		VStack(spacing: 14) {
 			cardSection(loadoutBinding)
 			
-			// Block 1: Title, Weapon Loadout & Privacy Settings
+			// Block 1: Title, Level Border, Weapon Loadout & Privacy Settings
 			LoadoutBlockCard {
 				changeTitleRow(loadoutBinding)
+				
+				Divider()
+					.padding(.leading, 50)
+				
+				levelBorderRow(loadoutBinding)
 				
 				Divider()
 					.padding(.leading, 50)
@@ -119,6 +131,15 @@ struct LoadoutDetailsView: View {
 		.padding(14)
 		.withLocalData($summary, id: loadout.subject)
 		.withLocalData($user, id: loadout.subject)
+		.withLocalData($identity, id: loadout.subject)
+		.task(id: loadout.subject) {
+			guard resolvedAccountLevel == 0 else { return }
+			await load { client in
+				if client.userID == loadout.subject {
+					fetchedAccountLevel = try? await client.getAccountLevel()
+				}
+			}
+		}
 		.confirmationDialog(
 			"Randomize Loadout",
 			isPresented: $showingRandomizeDialog,
@@ -172,6 +193,32 @@ struct LoadoutDetailsView: View {
 				title: "Change Title",
 				trailing: {
 					PlayerTitleLabel(titleID: loadout.identity.title)
+						.foregroundStyle(.secondary)
+						.lineLimit(1)
+				}
+			)
+		}
+		.buttonStyle(.plain)
+	}
+	
+	private func levelBorderRow(_ loadoutBinding: Binding<UpdatableLoadout>) -> some View {
+		let borderID = loadout.identity.levelBorder
+		let label: String = borderID.isPseudoNull
+			? "Automatic"
+			: (assets?.levelBorders[borderID]?.displayName ?? "Custom")
+		
+		return NavigationLink {
+			LevelBorderPicker(
+				selection: loadoutBinding.identity.levelBorder,
+				cardID: loadout.identity.card,
+				accountLevel: resolvedAccountLevel
+			)
+		} label: {
+			LoadoutActionRow(
+				icon: "seal.fill",
+				title: "Level Border",
+				trailing: {
+					Text(label)
 						.foregroundStyle(.secondary)
 						.lineLimit(1)
 				}

@@ -129,19 +129,25 @@ struct SettingsView: View {
 			}
 		}
 		
-		if settings.hasCustomAccentColor {
-			Button {
-				settings.resetAccentColor()
-			} label: {
-				Label {
-					Text("Reset to Default Accent")
-						.foregroundStyle(.tint)
-				} icon: {
-					Image(systemName: "arrow.counterclockwise")
-						.foregroundStyle(.tint)
+		Button {
+			settings.resetAccentColor()
+		} label: {
+			Label {
+				HStack {
+					Text("Reset to Default Color")
+						.foregroundStyle(settings.hasCustomAccentColor ? Color.accentColor : Color.secondary)
+					Spacer()
+					if !settings.hasCustomAccentColor {
+						Text("Default")
+							.foregroundStyle(.secondary)
+					}
 				}
+			} icon: {
+				Image(systemName: "arrow.counterclockwise")
+					.foregroundStyle(settings.hasCustomAccentColor ? Color.accentColor : Color.secondary)
 			}
 		}
+		.disabled(!settings.hasCustomAccentColor)
 	}
 }
 
