@@ -53,7 +53,11 @@ struct ReconBoltApp: App {
 				.environment(\.location, accountManager.activeAccount?.location)
 				.environment(\.ownsProVersion, store.ownsProVersion)
 				.preferredColorScheme(settings.theme.colorScheme)
-				.tint(Color(.displayP3, red: 0.940, green: 0.019, blue: 0.311))
+				.tint(settings.effectiveAccentColor)
+				.accentColor(settings.effectiveAccentColor)
+				.onChange(of: settings.customAccentColorComponents) { _ in
+					applyWindowTint(settings.effectiveAccentColor)
+				}
 				.task(id: accountManager.activeAccount?.id) {
 					await socialManager.connectIfNeeded(using: accountManager.activeAccount?.client)
 				}
@@ -68,12 +72,32 @@ struct ReconBoltApp: App {
 	
 	private func onLaunch() {
 		ReviewManager.registerUsage(points: 2)
+		applyWindowTint(settings.effectiveAccentColor)
+		
+		Task {
+			_ = await MatchRetentionManager.pruneIfEnabled(
+				settings: settings,
+				accountManager: accountManager,
+				bookmarkList: bookmarkList
+			)
+		}
 		
 		// make videos play audio even in silent mode
 		do {
 			try AVAudioSession.sharedInstance().setCategory(.playback)
 		} catch {
 			print("could not set audio session category: \(error)")
+		}
+	}
+	
+	private func applyWindowTint(_ color: Color) {
+		let uiColor = UIColor(color)
+		UIView.appearance().tintColor = uiColor
+		for scene in UIApplication.shared.connectedScenes {
+			guard let windowScene = scene as? UIWindowScene else { continue }
+			for window in windowScene.windows {
+				window.tintColor = uiColor
+			}
 		}
 	}
 }

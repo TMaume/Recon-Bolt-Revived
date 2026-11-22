@@ -7,13 +7,14 @@ struct LoadoutDetailsView: View {
 	var inventory: Inventory
 	
 	@LocalData private var summary: CareerSummary?
+	@LocalData private var user: User?
 	@EnvironmentObject private var presetManager: LoadoutPresetManager
 	@Environment(\.valorantLoad) private var load
 	@Environment(\.assets) private var assets
 	
 	@State private var privacyExpanded = false
 	@State private var showingRandomizeDialog = false
-	@State private var showingShareSheet = false
+	@State private var activeShareCard: LoadoutShareCardKind?
 	@State private var isRandomizing = false
 	@State private var actRankHiddenOverride: Bool?
 	
@@ -22,6 +23,7 @@ struct LoadoutDetailsView: View {
 		self._loadout = State(initialValue: .init(loadout))
 		self.inventory = inventory
 		self._summary = LocalData(id: loadout.subject)
+		self._user = LocalData(id: loadout.subject)
 	}
 	
 	var body: some View {
@@ -87,12 +89,22 @@ struct LoadoutDetailsView: View {
 				.disabled(isRandomizing)
 			}
 			
-			// Block 3: Standalone Share action
+			// Block 3: Standalone Share menu
 			LoadoutBlockCard {
-				Button {
-					showingShareSheet = true
+				Menu {
+					Button {
+						activeShareCard = .loadout
+					} label: {
+						Label("Loadout Card", systemImage: "scope")
+					}
+					
+					Button {
+						activeShareCard = .collection
+					} label: {
+						Label("Collection Card", systemImage: "square.grid.2x2")
+					}
 				} label: {
-					LoadoutActionRow(icon: "square.and.arrow.up", title: "Share")
+					LoadoutActionRow(icon: "square.and.arrow.up", title: "Share", showChevron: false)
 				}
 				.buttonStyle(.plain)
 			}
@@ -106,6 +118,7 @@ struct LoadoutDetailsView: View {
 		}
 		.padding(14)
 		.withLocalData($summary, id: loadout.subject)
+		.withLocalData($user, id: loadout.subject)
 		.confirmationDialog(
 			"Randomize Loadout",
 			isPresented: $showingRandomizeDialog,
@@ -121,8 +134,13 @@ struct LoadoutDetailsView: View {
 		} message: {
 			Text("Replaces your equipped card, title, weapon skins, and expressions.")
 		}
-		.sheet(isPresented: $showingShareSheet) {
-			LoadoutShareSheet(loadout: loadout)
+		.sheet(item: $activeShareCard) { kind in
+			switch kind {
+			case .loadout:
+				ShareLoadoutCardSheet(loadout: loadout, user: user)
+			case .collection:
+				ShareCollectionCardSheet(inventory: inventory, user: user)
+			}
 		}
 	}
 	

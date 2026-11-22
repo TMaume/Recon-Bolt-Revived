@@ -18,32 +18,55 @@ struct SettingsView: View {
 	var body: some View {
 		ScrollViewReader { scrollView in
 			Form {
-				AccountSettingsView(accountManager: accountManager, loginTarget: $loginTarget)
+				AccountSettingsView(
+					accountManager: accountManager,
+					loginTarget: $loginTarget,
+					showSignOutButton: false
+				)
 				
 				Section(header: Text("Settings", comment: "Settings: section")) {
 					mainSettings()
-					
-					NavigationLink {
-						AdvancedSettingsView(accountManager: accountManager, assetManager: assetManager)
-					} label: {
-						Label("Advanced Settings", systemImage: "gearshape.2")
-					}
 				}
 				
-				Section(String(localized: "In-App Store", defaultValue: "Store", comment: "Settings: section")) {
-					InAppStorefront(store: store)
-						.id(storefrontID)
+				Section {
+					NavigationLink {
+						StorageView(accountManager: accountManager, assetManager: assetManager, settings: settings)
+					} label: {
+						Label {
+							Text("Storage and Data")
+						} icon: {
+							Image(systemName: "arrow.up.arrow.down")
+								.foregroundStyle(.tint)
+						}
+					}
+					
+					NavigationLink {
+						AdvancedSettingsView(accountManager: accountManager, assetManager: assetManager, settings: settings)
+					} label: {
+						Label {
+							Text("Advanced Settings")
+						} icon: {
+							Image(systemName: "slider.horizontal.3")
+								.foregroundStyle(.tint)
+						}
+					}
 				}
 				
 				Section(header: Text("About", comment: "Settings: section")) {
 					NavigationLink {
 						AboutScreen()
 					} label: {
-						Label("About Recon Bolt Revived", systemImage: "questionmark")
+						Label {
+							Text("About Recon Bolt Revived")
+						} icon: {
+							Image(systemName: "questionmark")
+								.foregroundStyle(.tint)
+						}
 					}
 					
 					ListLink("DT-L21", icon: "person", destination: "https://guns.lol/dt.l21")
 				}
+				.id(storefrontID)
 			}
 			.deepLinkHandler { deepLink in
 				guard case .inApp(.storefront) = deepLink else { return }
@@ -58,7 +81,9 @@ struct SettingsView: View {
 		}
 		.onChange(of: loginTarget) { target in
 			// fresh Riot login page only when a new sign-in starts, never on app/scene re-activation
-			if target != nil { loginWebViewModel.startNewSession() }
+			if target != nil {
+				loginWebViewModel.startNewSession(clearWebData: settings.clearWebSignInDataOnOpen)
+			}
 		}
 		.navigationTitle("Settings")
 	}
@@ -75,6 +100,7 @@ struct SettingsView: View {
 				Text("Theme", comment: "Settings: picker")
 			} icon: {
 				Image(systemName: "sun.max")
+					.foregroundStyle(.tint)
 			}
 		}
 		
@@ -90,87 +116,32 @@ struct SettingsView: View {
 				}
 			} icon: {
 				Image(systemName: "square.dashed")
+					.foregroundStyle(.tint)
 			}
 		}
 		
-		Toggle(isOn: $settings.vibrateOnMatchFound) {
+		ColorPicker(selection: settings.accentColorBinding, supportsOpacity: false) {
 			Label {
-				Text("Vibrate when Match Found", comment: "Settings: toggle")
+				Text("Custom Accent Color")
 			} icon: {
-				Image(systemName: "bell")
+				Image(systemName: "paintpalette")
+					.foregroundStyle(.tint)
 			}
 		}
 		
-		Link(destination: URL(string: UIApplication.openSettingsURLString)!) {
-			NavigationLink {} label: { // i just want the chevron lol
+		if settings.hasCustomAccentColor {
+			Button {
+				settings.resetAccentColor()
+			} label: {
 				Label {
-					HStack {
-						Text("Change Language", comment: "Settings: button")
-						Spacer()
-						Image(systemName: "link")
-							.foregroundStyle(.secondary)
-					}
+					Text("Reset to Default Accent")
+						.foregroundStyle(.tint)
 				} icon: {
-					Image(systemName: "globe")
+					Image(systemName: "arrow.counterclockwise")
+						.foregroundStyle(.tint)
 				}
 			}
-			.tint(.primary)
 		}
-	}
-}
-
-struct AdvancedSettingsView: View {
-	@ObservedObject var accountManager: AccountManager
-	@ObservedObject var assetManager: AssetManager
-	@StateObject var storageManager = StorageManager()
-	@State var hasRefreshedWidgets = false
-	
-	var body: some View {
-		Form {
-			Section {
-				NavigationLink("Manage Assets") {
-					AssetsInfoView(assetManager: assetManager)
-				}
-				
-				if let activeAccount = accountManager.activeAccount {
-					NavigationLink {
-						ClientLogView(client: activeAccount.client)
-					} label: {
-						Text("Request Log", comment: "Advanced Settings: button to open request log")
-					}
-				}
-				
-				NavigationLink {
-					StorageManagementView(manager: storageManager, accountManager: accountManager)
-						.withLoadErrorAlerts()
-				} label: {
-					HStack {
-						Text("Manage Local Storage")
-						Spacer()
-						if let total = try? storageManager.totalBytes?.get() {
-							Text(total, format: .byteCount(style: .file))
-								.foregroundStyle(.secondary)
-						}
-					}
-				}
-			}
-			
-			Section {
-				Button("Force Refresh Widgets") {
-					WidgetCenter.shared.reloadAllTimelines()
-					hasRefreshedWidgets = true
-				}
-			} footer: {
-				Text("If your widgets seem broken, use this button to request an immediate refresh from iOS.")
-			}
-			.alert("Widget Refresh Requested", isPresented: $hasRefreshedWidgets) {
-				Button("OK") {}
-			} message: {
-				Text("iOS is a bit finnicky about this, so widgets may not refresh right away—feel free to reboot your device if this doesn't help!")
-			}
-
-		}
-		.navigationTitle("Advanced Settings")
 	}
 }
 
@@ -193,7 +164,7 @@ struct SettingsView_Previews: PreviewProvider {
 		SettingsView(accountManager: .mocked, assetManager: .forPreviews, settings: .init(), store: .init())
 			.withToolbar()
 		
-		AdvancedSettingsView(accountManager: .mocked, assetManager: .forPreviews)
+		AdvancedSettingsView(accountManager: .mocked, assetManager: .forPreviews, settings: .init())
 			.withToolbar()
 			.previewDisplayName("Advanced Settings")
 		

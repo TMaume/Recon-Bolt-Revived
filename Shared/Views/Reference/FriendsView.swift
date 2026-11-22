@@ -4,6 +4,7 @@ import ValorantAPI
 struct FriendsView: View {
 	@EnvironmentObject private var socialManager: SocialManager
 	@EnvironmentObject private var accountManager: AccountManager
+	@EnvironmentObject private var settings: AppSettings
 	@Environment(\.assets) private var assets
 	
 	@State private var search = ""
@@ -549,14 +550,18 @@ struct FriendsView: View {
 				!$0.isIncomingRequest && !$0.isOutgoingRequest && $0.status == .offline && matchesSearch($0)
 			}
 			.sorted { lhs, rhs in
-				switch (lhs.lastOnline, rhs.lastOnline) {
-				case let (.some(l), .some(r)) where l != r:
-					return l > r
-				case (.some, .none):
-					return true
-				case (.none, .some):
-					return false
-				default:
+				if settings.sortOfflineByLastSeen {
+					switch (lhs.lastOnline, rhs.lastOnline) {
+					case let (.some(l), .some(r)) where l != r:
+						return l > r
+					case (.some, .none):
+						return true
+					case (.none, .some):
+						return false
+					default:
+						return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+					}
+				} else {
 					return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
 				}
 			}
@@ -583,8 +588,15 @@ struct FriendsView: View {
 	// MARK: - Friend Card Row
 	
 	private func friendPartyRow(_ friend: XMPPFriend, isOfflineStyle: Bool = false) -> some View {
-		NavigationLink {
-			ChatView(friend: friend)
+		let hasUnread = (socialManager.unreadByJID[friend.jid] ?? 0) > 0
+		let opensProfileDirectly = settings.openProfileDirectly && !hasUnread && friend.puuid != nil
+		
+		return NavigationLink {
+			if opensProfileDirectly, let puuid = friend.puuid {
+				MatchListView(userID: puuid)
+			} else {
+				ChatView(friend: friend)
+			}
 		} label: {
 			HStack(spacing: 12) {
 				if let cardID = friend.playerCardID {
@@ -661,7 +673,13 @@ struct FriendsView: View {
 		}
 		.buttonStyle(.plain)
 		.contextMenu {
-			if let puuid = friend.puuid {
+			if opensProfileDirectly {
+				NavigationLink {
+					ChatView(friend: friend)
+				} label: {
+					Label("Open Chat", systemImage: "message")
+				}
+			} else if let puuid = friend.puuid {
 				NavigationLink {
 					MatchListView(userID: puuid)
 				} label: {

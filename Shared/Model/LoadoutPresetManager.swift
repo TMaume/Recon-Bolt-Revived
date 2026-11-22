@@ -70,6 +70,11 @@ final class LoadoutPresetManager: ObservableObject {
 		persist()
 	}
 	
+	func deleteAll() {
+		presets = []
+		persist()
+	}
+	
 	private func persist() {
 		LocalJSONStore.save(presets, to: filename)
 	}
