@@ -251,11 +251,17 @@ extension QueueID: DefaultsValueConvertible {}
 
 extension Agent.ID: FilterableID {
 	static func knownIDs(assets: AssetCollection?) -> [Self] {
-		assets?.agents.sorted(on: \.value.displayName).map(\.key) ?? []
+		assets?.agents
+			.sorted {
+				let lhsName = $0.key == .abilityDraftAgent ? "Gauntlet Robot" : $0.value.displayName
+				let rhsName = $1.key == .abilityDraftAgent ? "Gauntlet Robot" : $1.value.displayName
+				return lhsName < rhsName
+			}
+			.map(\.key) ?? []
 	}
 	
 	var icon: some View {
-		AgentImage.icon(self)
+		AgentImage.icon(self, teamID: nil)
 	}
 	
 	var label: some View {

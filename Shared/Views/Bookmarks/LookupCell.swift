@@ -25,60 +25,59 @@ struct LookupCell: View {
 			
 			content
 		}
+		.fixedSize(horizontal: false, vertical: true)
 	}
 	
 	private var content: some View {
-		ScrollViewReader { scrollView in
+		HStack {
 			HStack {
-				HStack {
-					TextField(String(localized: "Name", comment: "Bookmark/Player List: lookup name placeholder"), text: $gameName)
-						.frame(maxWidth: maxNameFieldWidth)
-						.focused($focusedField, equals: .gameName)
-						.submitLabel(.next)
-						.onSubmit {
-							focusedField = .tagLine
-						}
-					
-					HStack {
-						Text("#", comment: "Bookmark/Player List: lookup text fields")
-							.foregroundStyle(.secondary)
-						
-						TextField(String(localized: "Tag", comment: "Bookmark/Player List: lookup tag placeholder"), text: $tagLine)
-							.frame(width: tagFieldWidth)
-							.focused($focusedField, equals: .tagLine)
-							.submitLabel(.search)
-							.onSubmit { lookUpPlayer(scrollView: scrollView) }
-					}
-					.onTapGesture {
+				TextField(String(localized: "Name", comment: "Bookmark/Player List: lookup name placeholder"), text: $gameName)
+					.frame(maxWidth: maxNameFieldWidth)
+					.focused($focusedField, equals: .gameName)
+					.submitLabel(.next)
+					.onSubmit {
 						focusedField = .tagLine
 					}
-				}
-				.textInputAutocapitalization(.never)
-				.autocorrectionDisabled()
-				.opacity(isLoading ? 0.5 : 1)
 				
-				Spacer()
-				
-				Button {
-					lookUpPlayer(scrollView: scrollView)
-				} label: {
-					Label(String(localized: "Look Up", comment: "Bookmark/Player List: lookup button"), systemImage: "magnifyingglass")
+				HStack {
+					Text("#", comment: "Bookmark/Player List: lookup text fields")
+						.foregroundStyle(.secondary)
+					
+					TextField(String(localized: "Tag", comment: "Bookmark/Player List: lookup tag placeholder"), text: $tagLine)
+						.frame(width: tagFieldWidth)
+						.focused($focusedField, equals: .tagLine)
+						.submitLabel(.search)
+						.onSubmit { lookUpPlayer() }
 				}
-				.disabled(gameName.isEmpty || tagLine.isEmpty)
-				.fixedSize()
-				.overlay(alignment: .leading) {
-					if isLoading {
-						ProgressView()
-					}
+				.onTapGesture {
+					focusedField = .tagLine
 				}
 			}
-			.aligningListRowSeparator()
-			.disabled(isLoading)
-			.padding(.vertical, 8)
+			.textInputAutocapitalization(.never)
+			.autocorrectionDisabled()
+			.opacity(isLoading ? 0.5 : 1)
+			
+			Spacer()
+			
+			Button {
+				lookUpPlayer()
+			} label: {
+				Label(String(localized: "Look Up", comment: "Bookmark/Player List: lookup button"), systemImage: "magnifyingglass")
+			}
+			.disabled(gameName.isEmpty || tagLine.isEmpty)
+			.fixedSize()
+			.overlay(alignment: .leading) {
+				if isLoading {
+					ProgressView()
+				}
+			}
 		}
+		.aligningListRowSeparator()
+		.disabled(isLoading)
+		.padding(.vertical, 8)
 	}
 	
-	private func lookUpPlayer(scrollView: ScrollViewProxy) {
+	private func lookUpPlayer() {
 		guard !gameName.isEmpty, !tagLine.isEmpty else { return }
 		Task {
 			isLoading = true
@@ -88,7 +87,6 @@ struct LookupCell: View {
 				LocalDataProvider.dataFetched(user)
 				dispatchPrecondition(condition: .onQueue(.main))
 				history.lookedUp(user.id, location: location)
-				scrollView.scrollTo(user.id, anchor: nil) // TODO: this doesn't seem to do anything
 			}
 			isLoading = false
 		}

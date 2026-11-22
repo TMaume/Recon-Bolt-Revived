@@ -22,12 +22,12 @@ extension AgentImage {
 	static func icon(
 		_ id: Agent.ID,
 		outlineRadius: CGFloat? = nil,
-		teamID: Team.ID? = nil,
+		teamID: Team.ID?,
 		isOVariant: Bool = true
 	) -> some View {
+		let assetName = teamID?.gauntletRoboAssetName(isOVariant: isOVariant, isKillfeed: false) ?? "gauntlet/robo_grey_x"
 		if
 			id == .abilityDraftAgent,
-			let assetName = (teamID ?? Team.ID(rawID: "Team_1")).gauntletRoboAssetName(isOVariant: isOVariant, isKillfeed: false),
 			let uiImage = UIImage.bundledAsset(named: assetName)
 		{
 			Image(uiImage: uiImage)
