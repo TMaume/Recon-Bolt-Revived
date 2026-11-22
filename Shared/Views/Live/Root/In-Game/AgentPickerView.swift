@@ -88,7 +88,9 @@ struct AgentPickerView: View {
 			}
 			
 			if let agents = assets?.agents.values {
-				let sortedAgents = agents.sorted(on: \.displayName)
+				let sortedAgents = agents
+					.filter(\.isPlayableCharacter)
+					.sorted(on: \.displayName)
 					.movingToFront { inventory.owns($0.id) }
 				
 				let gridSpacing = 12.0
@@ -136,8 +138,7 @@ struct AgentPickerView: View {
 			}
 		} label: {
 			gridButton(isSelected: agent.id == selectedAgentID) {
-				agent.displayIcon.view()
-					.dynamicallyStroked(radius: 1.5, color: .white)
+				agent.displayIcon.view(outlineRadius: 1.5, shouldLoadImmediately: true)
 					.compositingGroup()
 					.opacity(ownsAgent ? 1 : 0.5)
 					.opacity(isTaken ? 0.8 : 1)

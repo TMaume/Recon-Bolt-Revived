@@ -14,6 +14,7 @@ struct StatisticsView: View {
 	@UserDefault.State("StatisticsView.excludedQueues")
 	var excludedQueues: Set<QueueID> = [
 		.deathmatch, // average DM win rate is far from 50%
+		.gauntlet,
 		.spikeRush,
 		.custom,
 		.escalation,
@@ -50,7 +51,7 @@ struct StatisticsView: View {
 				print("computing!")
 				let matches = fetchedMatches.filter { match in
 					guard !excludedQueues.contains(match.matchInfo.queueID ?? .custom) else { return false }
-					let player = match.players.firstElement(withID: user.id)!
+					guard let player = match.players.firstElement(withID: user.id) else { return false }
 					guard player.agentID.map(excludedAgents.contains(_:)) != true else { return false }
 					return true
 				}

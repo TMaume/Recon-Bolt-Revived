@@ -7,12 +7,18 @@ struct _AgentImageProvider: AssetImageProvider {
 }
 
 extension AgentImage {
-	static func icon(_ id: Agent.ID) -> Self {
-		Self(id: id, aspectRatio: 1, shouldLoadImmediately: true, getImage: \.displayIcon)
+	static func icon(_ id: Agent.ID, outlineRadius: CGFloat? = nil) -> Self {
+		Self(
+			id: id,
+			aspectRatio: 1,
+			outlineRadius: outlineRadius,
+			shouldLoadImmediately: true,
+			getImage: \.displayIcon
+		)
 	}
 	
 	static func fullPortrait(_ id: Agent.ID) -> Self {
-		Self(id: id, aspectRatio: 2048/1860, getImage: \.fullPortrait)
+		Self(id: id, aspectRatio: 2048/1860, preferFullResolution: true, getImage: \.fullPortrait)
 	}
 	
 	static func killfeedPortrait(_ id: Agent.ID) -> Self {

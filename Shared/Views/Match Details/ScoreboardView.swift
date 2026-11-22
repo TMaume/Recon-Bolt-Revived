@@ -10,12 +10,15 @@ struct ScoreboardView: View {
 	
 	var body: some View {
 		VStack {
-			let sorted = data.details.players.sorted { $0.score > $1.score }
-			
 			ScrollView(.horizontal, showsIndicators: false) {
 				VStack(spacing: ScoreboardRowView.padding) {
-					ForEach(sorted) { player in
-						ScoreboardRowView(player: player, data: data, highlight: $highlight)
+					if data.isMultiTeam {
+						multiTeamScoreboard
+					} else {
+						let sorted = data.details.players.sorted { $0.score > $1.score }
+						ForEach(sorted) { player in
+							ScoreboardRowView(player: player, data: data, highlight: $highlight)
+						}
 					}
 				}
 				.padding(.horizontal)
@@ -27,6 +30,56 @@ struct ScoreboardView: View {
 				Text("Update Ranks", comment: "Match Details: button")
 			}
 			.buttonStyle(.bordered)
+		}
+	}
+	
+	@ViewBuilder
+	private var multiTeamScoreboard: some View {
+		let playersByTeam = Dictionary(grouping: data.details.players, by: \.teamID)
+		let hasGroupedTeams = playersByTeam.values.contains { $0.count > 1 }
+		
+		ForEach(Array(data.rankedTeams.enumerated()), id: \.element.id) { index, team in
+			let teamPlayers = (playersByTeam[team.id] ?? []).sorted { $0.score > $1.score }
+			let placement = PlacementFormatter.ordinal(index + 1)
+			let teamColor = data.relativeColor(of: team.id) ?? .valorantRed
+			
+			if hasGroupedTeams {
+				VStack(alignment: .leading, spacing: ScoreboardRowView.padding) {
+					HStack(spacing: 8) {
+						Text(placement)
+							.font(.subheadline.weight(.bold))
+							.foregroundColor(teamColor)
+						
+						if team.id == data.myself?.teamID {
+							Text("Your Team", comment: "Scoreboard: badge on user's team in multi-team modes")
+								.font(.caption.weight(.semibold))
+								.foregroundColor(.valorantSelf)
+						}
+						
+						Spacer()
+						
+						if team.pointCount > 0 {
+							Text("\(team.pointCount) pts")
+								.font(.caption.monospacedDigit())
+								.foregroundStyle(.secondary)
+						}
+					}
+					.padding(.top, index == 0 ? 0 : 8)
+					
+					ForEach(teamPlayers) { player in
+						ScoreboardRowView(player: player, data: data, highlight: $highlight)
+					}
+				}
+			} else {
+				ForEach(teamPlayers) { player in
+					ScoreboardRowView(
+						player: player,
+						data: data,
+						placement: placement,
+						highlight: $highlight
+					)
+				}
+			}
 		}
 	}
 	
@@ -46,6 +99,7 @@ struct ScoreboardRowView: View {
 	
 	let player: Player
 	let data: MatchViewData
+	var placement: String? = nil
 	@Binding var highlight: PlayerHighlightInfo
 	
 	@LocalData var summary: CareerSummary?
@@ -59,10 +113,17 @@ struct ScoreboardRowView: View {
 		let relativeColor = data.relativeColor(of: player)
 		
 		HStack(spacing: Self.padding) {
+			if let placement {
+				Text(placement)
+					.font(.caption.weight(.bold))
+					.monospacedDigit()
+					.foregroundColor(relativeColor)
+					.frame(minWidth: 32)
+			}
+			
 			ZStack {
 				if let agentID = player.agentID {
-					AgentImage.icon(agentID)
-						.dynamicallyStroked(radius: 1, color: .white)
+					AgentImage.icon(agentID, outlineRadius: 1)
 				} else {
 					Image(systemName: "eye")
 						.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -81,7 +142,7 @@ struct ScoreboardRowView: View {
 				
 				ZStack {
 					if let score = player.stats?.score {
-						let roundsPlayed = data.details.roundResults.count
+						let roundsPlayed = max(1, data.details.roundResults.count)
 						Text(verbatim: "\(score / roundsPlayed)")
 					} else {
 						Text("–").foregroundStyle(.secondary)
@@ -176,9 +237,9 @@ struct ScoreboardRowView: View {
 }
 
 extension ScoreboardRowView {
-	init(player: Player, data: MatchViewData, highlight: Binding<PlayerHighlightInfo>) {
+	init(player: Player, data: MatchViewData, placement: String? = nil, highlight: Binding<PlayerHighlightInfo>) {
 		self.init(
-			player: player, data: data, highlight: highlight,
+			player: player, data: data, placement: placement, highlight: highlight,
 			summary: .init(id: player.id)
 		)
 	}

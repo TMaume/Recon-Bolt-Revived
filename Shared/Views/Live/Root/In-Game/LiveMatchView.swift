@@ -43,14 +43,18 @@ struct LiveMatchView: View {
 	private var playerList: some View {
 		if let ownPlayer = gameInfo.players.firstElement(withID: userID) {
 			let teams = Dictionary(grouping: gameInfo.players, by: \.teamID)
-			let allyTeam = teams[ownPlayer.teamID]!
+			let allyTeam = teams[ownPlayer.teamID] ?? []
 			let enemyTeams = teams
 				.filter { $0.key != ownPlayer.teamID }
 				.sorted(on: \.key.description)
+			let teamColors = Color.assignedTeamColors(
+				for: [ownPlayer.teamID] + enemyTeams.map(\.key),
+				ownTeamID: ownPlayer.teamID
+			)
 			
 			VStack(spacing: 10) {
 				ForEach(allyTeam) {
-					PlayerView(player: $0, ownPlayer: ownPlayer)
+					PlayerView(player: $0, ownPlayer: ownPlayer, teamColor: teamColors[$0.teamID] ?? .valorantBlue)
 				}
 				
 				ForEach(enemyTeams, id: \.key) { teamID, team in
@@ -58,7 +62,7 @@ struct LiveMatchView: View {
 						.padding(.vertical, 5)
 					
 					ForEach(team) {
-						PlayerView(player: $0, ownPlayer: ownPlayer)
+						PlayerView(player: $0, ownPlayer: ownPlayer, teamColor: teamColors[$0.teamID] ?? .valorantRed)
 					}
 				}
 			}
@@ -69,15 +73,17 @@ struct LiveMatchView: View {
 	struct PlayerView: View {
 		let player: LiveGameInfo.PlayerInfo
 		let ownPlayer: LiveGameInfo.PlayerInfo
+		var teamColor: Color? = nil
 		
 		@LocalData var playerUser: User?
 		@LocalData var summary: CareerSummary?
 		@Environment(\.assets) private var assets
 		@Environment(\.shouldAnonymize) private var shouldAnonymize
 		
-		init(player: LiveGameInfo.PlayerInfo, ownPlayer: LiveGameInfo.PlayerInfo) {
+		init(player: LiveGameInfo.PlayerInfo, ownPlayer: LiveGameInfo.PlayerInfo, teamColor: Color? = nil) {
 			self.player = player
 			self.ownPlayer = ownPlayer
+			self.teamColor = teamColor
 			self._playerUser = .init(id: player.id)
 			self._summary = .init(id: player.id)
 		}
@@ -85,14 +91,13 @@ struct LiveMatchView: View {
 		var body: some View {
 			let isAlly = player.teamID == ownPlayer.teamID
 			let isSelf = player.id == ownPlayer.id
-			let teamColor: Color = isAlly ? .valorantBlue : .valorantRed
-			let relativeColor = isSelf ? .valorantSelf : teamColor
+			let resolvedTeamColor: Color = teamColor ?? (isAlly ? .valorantBlue : .valorantRed)
+			let relativeColor = isSelf ? .valorantSelf : resolvedTeamColor
 			let iconSize = 48.0
 			
 			HStack {
 				if let agentID = player.agentID {
-					AgentImage.icon(agentID)
-						.dynamicallyStroked(radius: 1.5, color: .white)
+					AgentImage.icon(agentID, outlineRadius: 1.5)
 						.frame(width: iconSize, height: iconSize)
 						.mask(Circle())
 						.background(Circle().fill(relativeColor).opacity(0.5).padding(2))

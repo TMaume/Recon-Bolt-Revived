@@ -60,6 +60,8 @@ final class AssetManager: ObservableObject {
 	static let mockEmpty = AssetManager(assets: nil)
 	#endif
 	
+	private static let currentSchemaVersion = 2
+	
 	private func loadAssets() async throws -> AssetCollection {
 		let language = languageOverride
 		?? Bundle.preferredLocalizations(from: Locale.valorantLanguages).first
@@ -67,11 +69,18 @@ final class AssetManager: ObservableObject {
 		let client = AssetClient(language: language)
 		
 		let version = try await client.getCurrentVersion()
-		if let stored = storage.assets, stored.version == version, stored.language == language {
+		if
+			storage.schemaVersion == Self.currentSchemaVersion,
+			let stored = storage.assets,
+			stored.version == version,
+			stored.language == language
+		{
 			return stored
 		} else {
-			return try await client.collectAssets(for: version)
-			<- { storage.assets = $0 }
+			return try await client.collectAssets(for: version) <- {
+				storage.assets = $0
+				storage.schemaVersion = Self.currentSchemaVersion
+			}
 		}
 	}
 	
@@ -80,6 +89,8 @@ final class AssetManager: ObservableObject {
 		var assets: AssetCollection?
 		@UserDefault("AssetManager.languageOverride", defaults: .shared)
 		var languageOverride: String?
+		@UserDefault("AssetManager.schemaVersion", defaults: .shared)
+		var schemaVersion = 0
 	}
 }
 

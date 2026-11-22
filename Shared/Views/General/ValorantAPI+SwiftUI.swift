@@ -4,14 +4,82 @@ import ArrayBuilder
 
 extension Team.ID {
 	var color: Color? {
-		switch rawID {
-		case "Blue":
+		switch rawID.lowercased() {
+		case "blue":
 			return .valorantBlue
-		case "Red":
+		case "red":
 			return .valorantRed
+		case "green":
+			return .green
+		case "yellow":
+			return .yellow
+		case "purple":
+			return .purple
+		case "orange":
+			return .orange
+		case "pink", "magenta":
+			return .pink
+		case "teal":
+			return .teal
+		case "cyan":
+			return .cyan
+		case "neutral":
+			return .gray
 		default:
 			return nil
 		}
+	}
+}
+
+extension Color {
+	private static let multiTeamPalette: [Color] = [
+		.valorantRed,
+		.orange,
+		.purple,
+		.green,
+		.pink,
+		.cyan,
+		.indigo,
+		.mint,
+		.brown,
+		.teal,
+	]
+	
+	static func assignedTeamColors(for teamIDs: [Team.ID], ownTeamID: Team.ID?) -> [Team.ID: Color] {
+		var result: [Team.ID: Color] = [:]
+		
+		for id in teamIDs {
+			if let explicit = id.color {
+				result[id] = explicit
+			} else if id == ownTeamID {
+				result[id] = .valorantBlue
+			}
+		}
+		
+		let usedExplicitColors = Set(result.values)
+		let availablePalette = multiTeamPalette.filter { !usedExplicitColors.contains($0) }
+		let palette = availablePalette.isEmpty ? multiTeamPalette : availablePalette
+		
+		var nextIndex = 0
+		for id in teamIDs where result[id] == nil {
+			result[id] = palette[nextIndex % palette.count]
+			nextIndex += 1
+		}
+		return result
+	}
+}
+
+enum PlacementFormatter {
+	private static let formatter: NumberFormatter = {
+		let formatter = NumberFormatter()
+		formatter.numberStyle = .ordinal
+		let preferred = Bundle.main.preferredLocalizations.first ?? "en_US"
+		formatter.locale = Locale(identifier: preferred)
+		return formatter
+	}()
+	
+	static func ordinal(_ rank: Int) -> String {
+		formatter.string(from: NSNumber(value: rank)) ?? "#\(rank)"
 	}
 }
 
