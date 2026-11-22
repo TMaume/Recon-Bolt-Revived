@@ -4,24 +4,23 @@ struct AboutScreen: View {
 	var body: some View {
 		List {
 			Text("""
-				Hi! I'm Julian Dunskus, and I made this app.
+				Recon Bolt was originally created in October 2022 as a companion app for Valorant, helping players check hidden RR changes, match history, live lobbies, agent select, store offers, missions, loadouts, and detailed stats.
 
-				Recon Bolt started development in early 2021, back when it wasn't yet possible to see your RR gains and losses in the game, but the API offered those numbers. I made an app to see the numbers and better understand my rank changes.
+				Development was forced to stop after legal threats from Riot in 2024, even though Riot had reviewed and approved the app two years earlier. Without updates, Riot's API changes throughout 2024 gradually broke the app until users could no longer connect.
 
-				As you can guess, the scope expanded massively over time to what you're using now. I hope you're enjoying it!
-
-				If you've encountered a bug or have some feedback, I'm always happy to hear it on the Discord Server or GitHub :)
+				Recon Bolt Revived brings the app back online with Riot WebView OAuth and 2FA login, fixed API endpoints, newer weapons, a confirmed Dodge button in agent select, and Pro features unlocked by default.
 				""", comment: "About Screen"
 			)
 			
 			Section(header: Text("Links", comment: "About Screen: section")) {
-				ListLink("Discord Server", destination: "https://discord.gg/bwENMNRqNa")
-				ListLink("GitHub Repo", destination: "https://github.com/juliand665/Recon-Bolt")
-				ListLink("Official Website", destination: "https://dapprgames.com/recon-bolt")
-				ListLink("Twitter @juliand665", destination: "https://twitter.com/juliand665")
+				ListLink("GitHub Repo", destination: "https://github.com/TMaume/Recon-Bolt-Revived")
+				ListLink("Original Creator Page", destination: "https://juliand665.com/")
+				ListLink("Revived Creator Page", destination: "https://guns.lol/dt.l21")
 			}
 			
 			Section(header: Text("Credits", comment: "About Screen: section")) {
+				Text("Originally created by [Julian Dunskus](https://juliand665.com/).")
+				
 				Text("Many thanks to the volunteer translators from our Discord server who have been hard at working translating the app to new languages!", comment: "About Screen")
 				
 				VStack(alignment: .leading, spacing: 8) {

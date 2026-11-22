@@ -36,10 +36,8 @@ struct SettingsView: View {
 					NavigationLink {
 						AboutScreen()
 					} label: {
-						Label("About Recon Bolt", systemImage: "questionmark")
+						Label("About Recon Bolt Revived", systemImage: "questionmark")
 					}
-					
-					ListLink("Rate on the App Store", icon: "star", destination: "https://apps.apple.com/app/recon-bolt/id1563649061?action=write-review")
 					
 					ListLink("DT-L21", icon: "person", destination: "https://guns.lol/dt.l21")
 				}

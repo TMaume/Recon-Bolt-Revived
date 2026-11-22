@@ -14,8 +14,7 @@ struct InAppStorefront: View {
 				
 				VStack(alignment: .leading, spacing: 8) {
 					if store.ownsProVersion {
-						Text("Thank you for supporting Recon Bolt!", comment: "Pro Store").font(.callout)
-						Text("I hope you enjoy the pro features :)", comment: "Pro Store").font(.callout)
+						Text("Pro activated by default in the Revived version.", comment: "Pro Store").font(.callout)
 					} else {
 						let bullets = [
 							Text("Support Further Development!", comment: "Pro Store"),

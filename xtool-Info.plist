@@ -11,7 +11,9 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Recon Bolt</string>
+	<string>Recon Bolt Revived</string>
+	<key>CFBundleDisplayName</key>
+	<string>Recon Bolt Revived</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
