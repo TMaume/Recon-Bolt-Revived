@@ -41,7 +41,7 @@ struct LineupsView: View {
 							Button("Retry") {
 								Task { await reload() }
 							}
-							Link("Open on Tracker.gg", destination: URL(string: "https://tracker.gg/valorant/guides/clips")!)
+							Link("Open on Tricks.gg", destination: LineupGuide.siteURL)
 						}
 					}
 					.padding(.vertical, 4)
@@ -50,7 +50,7 @@ struct LineupsView: View {
 				guidesListSection(items: filtered(lineupsManager.guides), header: "Line-Ups")
 			}
 		}
-		.searchable(text: $search, prompt: Text("Search line-ups or locations"))
+		.searchable(text: $search, prompt: Text("Search line-ups, agents, or abilities"))
 		.navigationTitle("Line-Ups")
 		.toolbar {
 			ToolbarItem(placement: .primaryAction) {
@@ -73,7 +73,9 @@ struct LineupsView: View {
 		.onChange(of: selectedMapName) { _ in Task { await reload() } }
 		.onChange(of: selectedAgentName) { _ in Task { await reload() } }
 		.onChange(of: side) { _ in Task { await reload() } }
-		.onChange(of: sort) { _ in Task { await reload() } }
+		.onChange(of: sort) { newSort in
+			lineupsManager.sortGuides(by: newSort)
+		}
 	}
 	
 	@ViewBuilder
@@ -122,7 +124,7 @@ struct LineupsView: View {
 						LineupPlayerView(guide: guide)
 					} label: {
 						HStack(spacing: 12) {
-							if let thumb = guide.previewImageUrl, let url = URL(string: thumb) {
+							if let url = guide.imageURL {
 								AsyncImage(url: url) { phase in
 									switch phase {
 									case .success(let image):
@@ -142,25 +144,30 @@ struct LineupsView: View {
 									.lineLimit(2)
 								
 								HStack(spacing: 6) {
-									if let agent = guide.attributes?.agent {
+									if let agent = guide.agent {
 										Text(agent.capitalized)
 									}
-									if let side = guide.attributes?.side {
+									if let side = guide.side {
 										Text("• \(side.capitalized)")
 									}
-									if let loc = guide.attributes?.location {
-										Text("• \(loc)")
+									if let ability = guide.ability {
+										Text("• \(ability.capitalized)")
 									}
 								}
 								.font(.caption2)
 								.foregroundStyle(.secondary)
 								.lineLimit(1)
 								
-								if let views = guide.viewsDisplay ?? guide.views.map({ "\($0.formatted()) views" }) {
-									Text(views)
-										.font(.caption2)
-										.foregroundStyle(.tertiary)
+								HStack(spacing: 8) {
+									if let views = guide.views {
+										Text("\(views.formatted()) views")
+									}
+									if let votes = guide.votes {
+										Text("• \(votes.formatted()) votes")
+									}
 								}
+								.font(.caption2)
+								.foregroundStyle(.tertiary)
 							}
 							
 							Spacer()
@@ -182,8 +189,10 @@ struct LineupsView: View {
 		guard !search.isEmpty else { return list }
 		return list.filter {
 			$0.title.localizedCaseInsensitiveContains(search)
-				|| ($0.attributes?.location?.localizedCaseInsensitiveContains(search) == true)
-				|| ($0.attributes?.agent?.localizedCaseInsensitiveContains(search) == true)
+				|| ($0.agent?.localizedCaseInsensitiveContains(search) == true)
+				|| ($0.map?.localizedCaseInsensitiveContains(search) == true)
+				|| ($0.ability?.localizedCaseInsensitiveContains(search) == true)
+				|| ($0.difficulty?.localizedCaseInsensitiveContains(search) == true)
 		}
 	}
 	
@@ -206,12 +215,12 @@ struct LineupPlayerView: View {
 	var body: some View {
 		ScrollView {
 			VStack(alignment: .leading, spacing: 14) {
-				if let hlsURL = guide.hlsStreamURL {
+				if let videoURL = guide.videoURL {
 					VideoPlayer(player: player)
 						.aspectRatio(16/9, contentMode: .fit)
 						.cornerRadius(12)
 						.onAppear {
-							let avPlayer = AVPlayer(url: hlsURL)
+							let avPlayer = AVPlayer(url: videoURL)
 							self.player = avPlayer
 							avPlayer.play()
 						}
@@ -237,23 +246,33 @@ struct LineupPlayerView: View {
 					Text(guide.title)
 						.font(.title3.bold())
 					
-					if let creator = guide.creator?.platformUserHandle {
-						Text("By \(creator)")
-							.font(.subheadline)
-							.foregroundStyle(.secondary)
+					if guide.views != nil || guide.votes != nil {
+						HStack(spacing: 8) {
+							if let views = guide.views {
+								Text("\(views.formatted()) views")
+							}
+							if let votes = guide.votes {
+								Text("• \(votes.formatted()) votes")
+							}
+						}
+						.font(.subheadline)
+						.foregroundStyle(.secondary)
 					}
 					
-					HStack(spacing: 8) {
-						if let map = guide.attributes?.map { badge(map.capitalized) }
-						if let agent = guide.attributes?.agent { badge(agent.capitalized) }
-						if let side = guide.attributes?.side { badge(side.capitalized) }
-						if let ability = guide.attributes?.ability { badge(ability.capitalized) }
+					ScrollView(.horizontal, showsIndicators: false) {
+						HStack(spacing: 8) {
+							if let map = guide.map { badge(map.capitalized) }
+							if let agent = guide.agent { badge(agent.capitalized) }
+							if let side = guide.side { badge(side.capitalized) }
+							if let ability = guide.ability { badge(ability.capitalized) }
+							if let difficulty = guide.difficulty { badge(difficulty.capitalized) }
+						}
 					}
 				}
 				.padding(.horizontal, 4)
 				
-				Link(destination: guide.trackerURL) {
-					Label("Open on Tracker.gg", systemImage: "safari")
+				Link(destination: LineupGuide.siteURL) {
+					Label("Open on Tricks.gg", systemImage: "safari")
 						.frame(maxWidth: .infinity)
 						.padding()
 						.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 12))
