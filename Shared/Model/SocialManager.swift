@@ -26,6 +26,11 @@ struct FriendListChangeEvent: Identifiable, Codable, Equatable, Sendable {
 }
 
 @MainActor
+final class SocialOnlineCount: ObservableObject {
+	@Published var count: Int = 0
+}
+
+@MainActor
 final class SocialManager: ObservableObject {
 	enum ConnectionState: Equatable {
 		case disconnected
@@ -90,10 +95,18 @@ final class SocialManager: ObservableObject {
 	@Published var lastSyncedAt: Date?
 	@Published var isRefreshing = false
 	
+	let onlineCountModel = SocialOnlineCount()
+	
 	private let client = XMPPClient()
 	private var connectedUserID: User.ID?
 	private var loadedCacheUserID: User.ID?
+	private var activeClient: ValorantClient?
 	private var connectAttempt = 0
+	private var connectTask: Task<Void, Never>?
+	private var autoReconnectTask: Task<Void, Never>?
+	private var autoReconnectAttempt = 0
+	private var isInBackground = false
+	private var didBackgroundWhileConnected = false
 	private var snapshotSubscriptions: [String: String] = [:]
 	private var locallyRemovedJIDs: Set<String> = []
 	private var resourcesByJID: [String: [String: XMPPPresenceUpdate]] = [:]
@@ -104,6 +117,15 @@ final class SocialManager: ObservableObject {
 	private var lastPresenceAt: Date?
 	private var deferredSaveTask: Task<Void, Never>?
 	private var refreshResetTask: Task<Void, Never>?
+	private var pendingPresenceUpdates: [XMPPPresenceUpdate] = []
+	private var presenceFlushTask: Task<Void, Never>?
+	
+	private(set) var friends: [XMPPFriend] = []
+	private(set) var onlineCount: Int = 0
+	private(set) var confirmedFriendCount: Int = 0
+	private(set) var outgoingRequestCount: Int = 0
+	private(set) var incomingRequestCount: Int = 0
+	private var puuidToJID: [String: String] = [:]
 	
 	init() {
 		LocalDataProvider.onIdentitiesStored = { [weak self] identities, updateTime in
@@ -118,8 +140,8 @@ final class SocialManager: ObservableObject {
 		}
 	}
 	
-	var friends: [XMPPFriend] {
-		friendsByJID.values.sorted { lhs, rhs in
+	private func commitFriends(_ updated: [String: XMPPFriend]) {
+		let sorted = updated.values.sorted { lhs, rhs in
 			if lhs.isIncomingRequest != rhs.isIncomingRequest {
 				return lhs.isIncomingRequest
 			}
@@ -128,24 +150,39 @@ final class SocialManager: ObservableObject {
 			}
 			return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
 		}
-	}
-	
-	var onlineCount: Int {
-		friendsByJID.values.filter {
-			!$0.isIncomingRequest && !$0.isOutgoingRequest && $0.status != .offline
-		}.count
-	}
-	
-	var confirmedFriendCount: Int {
-		friendsByJID.values.filter { !$0.isIncomingRequest && !$0.isOutgoingRequest }.count
-	}
-	
-	var outgoingRequestCount: Int {
-		friendsByJID.values.filter(\.isOutgoingRequest).count
-	}
-	
-	var incomingRequestCount: Int {
-		friendsByJID.values.filter(\.isIncomingRequest).count
+		var online = 0
+		var confirmed = 0
+		var outgoing = 0
+		var incoming = 0
+		var index: [String: String] = Dictionary(minimumCapacity: updated.count)
+		for friend in sorted {
+			if friend.isIncomingRequest {
+				incoming += 1
+			} else if friend.isOutgoingRequest {
+				outgoing += 1
+			} else {
+				confirmed += 1
+				if friend.status != .offline {
+					online += 1
+				}
+			}
+			if let puuidKey = friend.puuid?.description.lowercased() {
+				index[puuidKey] = friend.jid
+			}
+			if let node = friend.jid.split(separator: "@").first?.lowercased(), index[node] == nil {
+				index[node] = friend.jid
+			}
+		}
+		self.friends = sorted
+		self.onlineCount = online
+		self.confirmedFriendCount = confirmed
+		self.outgoingRequestCount = outgoing
+		self.incomingRequestCount = incoming
+		self.puuidToJID = index
+		self.friendsByJID = updated
+		if onlineCountModel.count != online {
+			onlineCountModel.count = online
+		}
 	}
 	
 	func connectIfNeeded(using apiClient: ValorantClient?) async {
@@ -154,6 +191,7 @@ final class SocialManager: ObservableObject {
 			return
 		}
 		
+		activeClient = apiClient
 		loadCacheIfNeeded(for: apiClient.userID)
 		
 		if connectedUserID == apiClient.userID {
@@ -163,39 +201,171 @@ final class SocialManager: ObservableObject {
 				}
 				return
 			}
-			if connectionState == .connecting {
+			if connectionState == .connecting, connectTask != nil {
 				return
 			}
 		}
 		
-		await reconnect(using: apiClient, clearExisting: false)
+		await reconnect(using: apiClient, clearExisting: false, isAutoRetry: false)
 	}
 	
-	func reconnect(using apiClient: ValorantClient, clearExisting: Bool = false) async {
+	func reconnect(
+		using apiClient: ValorantClient,
+		clearExisting: Bool = false,
+		isAutoRetry: Bool = false
+	) async {
+		autoReconnectTask?.cancel()
+		autoReconnectTask = nil
+		if !isAutoRetry {
+			autoReconnectAttempt = 0
+		}
+		connectTask?.cancel()
 		connectAttempt += 1
 		let attempt = connectAttempt
-		PerfMonitor.log("XMPP", "reconnect start attempt=\(attempt) user=\(apiClient.userID)")
-		await client.disconnect() // cancels any stuck in-flight attempt
+		activeClient = apiClient
 		loadCacheIfNeeded(for: apiClient.userID)
 		connectedUserID = apiClient.userID
 		connectionState = .connecting
 		if clearExisting {
-			friendsByJID = [:]
+			commitFriends([:])
 		}
-		do {
-			try await client.connect(client: apiClient) { [weak self] event in
-				await self?.handle(event)
+		
+		let task = Task { @MainActor [weak self] in
+			guard let self else { return }
+			defer {
+				if self.connectAttempt == attempt {
+					self.connectTask = nil
+				}
 			}
-			PerfMonitor.log("XMPP", "reconnect finished attempt=\(attempt)")
-		} catch {
-			PerfMonitor.log("XMPP", "reconnect failed attempt=\(attempt) cancelled=\(error is CancellationError) error=\(error.localizedDescription)")
-			guard attempt == connectAttempt else { return } // superseded by a newer attempt
-			await client.disconnect()
-			connectionState = .failed(error.localizedDescription)
+			PerfMonitor.log("XMPP", "reconnect start attempt=\(attempt) user=\(apiClient.userID)")
+			await self.client.disconnect()
+			guard attempt == self.connectAttempt, !Task.isCancelled else { return }
+			do {
+				try await self.client.connect(client: apiClient) { [weak self] event in
+					await self?.handle(event, attempt: attempt)
+				}
+				guard attempt == self.connectAttempt else { return }
+				self.autoReconnectAttempt = 0
+				PerfMonitor.log("XMPP", "reconnect finished attempt=\(attempt)")
+			} catch {
+				guard attempt == self.connectAttempt else { return }
+				if Self.isCancellation(error) {
+					PerfMonitor.log("XMPP", "reconnect cancelled attempt=\(attempt)")
+					await self.client.disconnect()
+					guard attempt == self.connectAttempt else { return }
+					if self.connectionState == .connecting {
+						self.connectionState = .disconnected
+					}
+					return
+				}
+				PerfMonitor.log("XMPP", "reconnect failed attempt=\(attempt) error=\(error.localizedDescription)")
+				await self.client.disconnect()
+				guard attempt == self.connectAttempt else { return }
+				
+				if self.isInBackground {
+					self.connectionState = .disconnected
+					return
+				}
+				
+				if case XMPPError.authenticationFailed = error, !isAutoRetry {
+					self.scheduleAutoReconnect(using: apiClient, immediate: true, delayOverride: 0.25)
+					return
+				}
+				
+				if isAutoRetry, !Self.isUnrecoverableAuthError(error), self.autoReconnectAttempt < 3 {
+					let delay = Self.retryDelaySeconds(for: error, attemptIndex: self.autoReconnectAttempt)
+					let currentRetry = self.autoReconnectAttempt
+					self.autoReconnectAttempt += 1
+					if currentRetry > 0 {
+						self.connectionState = .failed(error.localizedDescription)
+					}
+					self.scheduleAutoReconnect(using: apiClient, immediate: false, delayOverride: delay)
+					return
+				}
+				
+				self.connectionState = .failed(error.localizedDescription)
+			}
+		}
+		connectTask = task
+		await task.value
+	}
+	
+	private func scheduleAutoReconnect(
+		using apiClient: ValorantClient,
+		immediate: Bool,
+		delayOverride: TimeInterval
+	) {
+		autoReconnectTask?.cancel()
+		let delay = immediate ? 0.25 : delayOverride
+		let expectedAttempt = connectAttempt
+		autoReconnectTask = Task { @MainActor [weak self] in
+			guard let self else { return }
+			if delay > 0 {
+				try? await Task.sleep(for: .seconds(delay))
+			}
+			guard !Task.isCancelled, !self.isInBackground, self.connectAttempt == expectedAttempt else { return }
+			await self.reconnect(using: apiClient, clearExisting: false, isAutoRetry: true)
+		}
+	}
+	
+	private static func isCancellation(_ error: Error) -> Bool {
+		error is CancellationError || (error as? URLError)?.code == .cancelled
+	}
+	
+	private static func isUnrecoverableAuthError(_ error: Error) -> Bool {
+		if let apiError = error as? APIError {
+			return apiError.recommendsReauthentication
+		}
+		if case XMPPError.authenticationFailed = error {
+			return true
+		}
+		return false
+	}
+	
+	private static func retryDelaySeconds(for error: Error, attemptIndex: Int) -> TimeInterval {
+		if case APIError.rateLimited(let retryAfter) = error {
+			return TimeInterval(max(retryAfter ?? 2, 2))
+		}
+		switch attemptIndex {
+		case 0: return 2
+		case 1: return 5
+		default: return 12
+		}
+	}
+	
+	func handleDidEnterBackground() {
+		isInBackground = true
+		didBackgroundWhileConnected = (connectionState == .connected)
+		autoReconnectTask?.cancel()
+		autoReconnectTask = nil
+	}
+	
+	func handleSceneActivation(using apiClient: ValorantClient?) async {
+		isInBackground = false
+		guard let apiClient else { return }
+		activeClient = apiClient
+		loadCacheIfNeeded(for: apiClient.userID)
+		
+		switch connectionState {
+		case .disconnected, .failed:
+			await reconnect(using: apiClient, clearExisting: false, isAutoRetry: true)
+		case .connecting:
+			if connectTask == nil {
+				await reconnect(using: apiClient, clearExisting: false, isAutoRetry: true)
+			}
+		case .connected:
+			let alive = await client.ping()
+			if !alive {
+				await reconnect(using: apiClient, clearExisting: false, isAutoRetry: true)
+			} else if didBackgroundWhileConnected || isBackgroundRefreshDue {
+				didBackgroundWhileConnected = false
+				await refreshRosterInBackground()
+			}
 		}
 	}
 	
 	func refreshNow(using apiClient: ValorantClient) async {
+		activeClient = apiClient
 		if connectionState == .connected {
 			isRefreshing = true
 			refreshResetTask?.cancel()
@@ -209,10 +379,10 @@ final class SocialManager: ObservableObject {
 			} catch {
 				refreshResetTask?.cancel()
 				isRefreshing = false
-				await reconnect(using: apiClient, clearExisting: false)
+				await reconnect(using: apiClient, clearExisting: false, isAutoRetry: false)
 			}
 		} else {
-			await reconnect(using: apiClient, clearExisting: false)
+			await reconnect(using: apiClient, clearExisting: false, isAutoRetry: false)
 		}
 	}
 	
@@ -227,13 +397,24 @@ final class SocialManager: ObservableObject {
 	}
 	
 	func disconnect() async {
+		connectAttempt += 1
+		connectTask?.cancel()
+		connectTask = nil
+		autoReconnectTask?.cancel()
+		autoReconnectTask = nil
+		autoReconnectAttempt = 0
+		didBackgroundWhileConnected = false
+		activeClient = nil
+		presenceFlushTask?.cancel()
+		presenceFlushTask = nil
+		pendingPresenceUpdates.removeAll()
 		refreshResetTask?.cancel()
 		deferredSaveTask?.cancel()
 		await client.disconnect()
 		connectedUserID = nil
 		loadedCacheUserID = nil
 		connectionState = .disconnected
-		friendsByJID = [:]
+		commitFriends([:])
 		snapshotSubscriptions = [:]
 		locallyRemovedJIDs = []
 		resourcesByJID = [:]
@@ -312,6 +493,7 @@ final class SocialManager: ObservableObject {
 		asOf updateTime: Date = .now
 	) {
 		var didUpdate = false
+		var updatedFriends: [String: XMPPFriend]?
 		for identity in identities {
 			let key = identity.id.description.lowercased()
 			if let previousDate = cachedCardDateByPUUID[key], updateTime < previousDate {
@@ -324,29 +506,30 @@ final class SocialManager: ObservableObject {
 					didUpdate = true
 				}
 			}
-			for jid in friendsByJID.keys {
-				let matchesPUUID = friendsByJID[jid]?.puuid?.description.lowercased() == key
-				let matchesNode = jid.split(separator: "@").first?.lowercased() == key
-				guard matchesPUUID || matchesNode, var friend = friendsByJID[jid] else { continue }
-				
-				var changedFriend = false
-				if !identity.cardID.isPseudoNull, friend.playerCardID != identity.cardID {
-					friend.playerCardID = identity.cardID
-					changedFriend = true
-				}
-				if identity.accountLevel > 0, (friend.accountLevel ?? 0) < identity.accountLevel {
-					friend.accountLevel = identity.accountLevel
-					changedFriend = true
-				}
-				if let tier = competitiveTierByID[identity.id], tier >= 3, friend.competitiveTier == nil {
-					friend.competitiveTier = tier
-					changedFriend = true
-				}
-				if changedFriend {
-					friendsByJID[jid] = friend
-					didUpdate = true
-				}
+			guard let jid = puuidToJID[key],
+			      var friend = updatedFriends?[jid] ?? friendsByJID[jid] else { continue }
+			
+			var changedFriend = false
+			if !identity.cardID.isPseudoNull, friend.playerCardID != identity.cardID {
+				friend.playerCardID = identity.cardID
+				changedFriend = true
 			}
+			if identity.accountLevel > 0, (friend.accountLevel ?? 0) < identity.accountLevel {
+				friend.accountLevel = identity.accountLevel
+				changedFriend = true
+			}
+			if let tier = competitiveTierByID[identity.id], tier >= 3, friend.competitiveTier == nil {
+				friend.competitiveTier = tier
+				changedFriend = true
+			}
+			if changedFriend {
+				if updatedFriends == nil { updatedFriends = friendsByJID }
+				updatedFriends?[jid] = friend
+				didUpdate = true
+			}
+		}
+		if let updatedFriends {
+			commitFriends(updatedFriends)
 		}
 		if didUpdate {
 			scheduleCacheSave()
@@ -375,7 +558,11 @@ final class SocialManager: ObservableObject {
 	
 	func acceptFriend(_ friend: XMPPFriend) async throws {
 		try await client.acceptFriend(jid: friend.jid)
-		friendsByJID[friend.jid]?.subscription = "both"
+		var updated = friendsByJID
+		if updated[friend.jid] != nil {
+			updated[friend.jid]?.subscription = "both"
+			commitFriends(updated)
+		}
 		snapshotSubscriptions[friend.jid] = "both"
 		scheduleCacheSave()
 	}
@@ -383,7 +570,11 @@ final class SocialManager: ObservableObject {
 	func removeFriend(_ friend: XMPPFriend) async throws {
 		locallyRemovedJIDs.insert(friend.jid)
 		try await client.removeFriend(jid: friend.jid)
-		friendsByJID.removeValue(forKey: friend.jid)
+		var updated = friendsByJID
+		if updated.removeValue(forKey: friend.jid) != nil {
+			commitFriends(updated)
+		}
+		resourcesByJID.removeValue(forKey: friend.jid)
 		snapshotSubscriptions.removeValue(forKey: friend.jid)
 		scheduleCacheSave()
 	}
@@ -403,16 +594,19 @@ final class SocialManager: ObservableObject {
 			return exact
 		}
 		if let node = bare.split(separator: "@").first?.lowercased(),
-		   let byPUUID = friendsByJID.keys.first(where: { $0.split(separator: "@").first?.lowercased() == node }) {
+		   let byPUUID = puuidToJID[node] {
 			return byPUUID
 		}
 		return bare
 	}
 	
-	private func handle(_ event: XMPPEvent) {
+	private func handle(_ event: XMPPEvent, attempt: Int) {
+		guard attempt == connectAttempt else { return }
+		
 		switch event {
 		case .connected(let jid):
 			PerfMonitor.log("XMPP", "connected jid=\(jid)")
+			self.autoReconnectAttempt = 0
 			self.myJID = jid
 			self.resourcesByJID = [:]
 			self.ownResources = [:]
@@ -430,20 +624,28 @@ final class SocialManager: ObservableObject {
 			PerfMonitor.log("XMPP", "disconnected error=\(error?.localizedDescription ?? "none")")
 			self.isRefreshing = false
 			self.loadingHistoryJIDs.removeAll()
-			if let error {
+			if self.isInBackground {
+				self.connectionState = .disconnected
+			} else if let apiClient = self.activeClient, let error, !Self.isUnrecoverableAuthError(error) {
+				self.connectionState = .connecting
+				self.autoReconnectAttempt = 0
+				self.scheduleAutoReconnect(using: apiClient, immediate: false, delayOverride: 1.5)
+			} else if let error {
 				self.connectionState = .failed(error.localizedDescription)
 			} else {
 				self.connectionState = .disconnected
 			}
 			
 		case let .rosterReceived(list, isFullSnapshot):
+			flushPendingPresenceUpdates()
 			let previousFriends = friendsByJID
+			var updated = friendsByJID
 			
 			for var item in list {
 				if item.subscription == "remove" {
-					friendsByJID.removeValue(forKey: item.jid)
+					updated.removeValue(forKey: item.jid)
 					resourcesByJID.removeValue(forKey: item.jid)
-				} else if var existing = friendsByJID[item.jid] {
+				} else if var existing = updated[item.jid] {
 					if !item.gameName.isEmpty { existing.gameName = item.gameName }
 					if !item.tagLine.isEmpty { existing.tagLine = item.tagLine }
 					existing.subscription = item.subscription
@@ -457,14 +659,14 @@ final class SocialManager: ObservableObject {
 						existing.note = item.note
 					}
 					existing.lastOnline = Self.newerDate(existing.lastOnline, item.lastOnline)
-					friendsByJID[item.jid] = existing
+					updated[item.jid] = existing
 				} else {
 					if item.playerCardID == nil,
 					   let key = item.puuid?.description.lowercased() ?? item.jid.split(separator: "@").first?.lowercased(),
 					   let cachedCard = cachedCardByPUUID[key] {
 						item.playerCardID = cachedCard
 					}
-					friendsByJID[item.jid] = item
+					updated[item.jid] = item
 				}
 			}
 			
@@ -480,15 +682,17 @@ final class SocialManager: ObservableObject {
 					diffRosterForChanges(
 						oldSubs: snapshotSubscriptions,
 						oldFriends: previousFriends,
-						newSubs: newSubs
+						newSubs: newSubs,
+						newFriends: updated
 					)
 				}
 				
-				for jid in Array(friendsByJID.keys) where !activeJIDs.contains(jid) {
-					friendsByJID.removeValue(forKey: jid)
+				for jid in Array(updated.keys) where !activeJIDs.contains(jid) {
+					updated.removeValue(forKey: jid)
 					resourcesByJID.removeValue(forKey: jid)
 				}
 				
+				commitFriends(updated)
 				snapshotSubscriptions = newSubs
 				locallyRemovedJIDs.removeAll()
 				lastSyncedAt = Date()
@@ -497,6 +701,7 @@ final class SocialManager: ObservableObject {
 				saveCacheNow()
 				Task { await self.hydrateFriendCardsFromLocalData() }
 			} else {
+				commitFriends(updated)
 				scheduleCacheSave()
 			}
 			
@@ -515,78 +720,14 @@ final class SocialManager: ObservableObject {
 				return
 			}
 			
-			var friend = friendsByJID[update.jid] ?? XMPPFriend(
-				jid: update.jid,
-				puuid: update.jid.components(separatedBy: "@").first.flatMap(User.ID.init),
-				gameName: "",
-				tagLine: "",
-				subscription: "both"
-			)
-			let wasOnline = friend.status != .offline
-			
-			if let cardID = update.playerCardID {
-				friend.playerCardID = cardID
-				if !cardID.isPseudoNull,
-				   let puuidKey = friend.puuid?.description.lowercased() ?? update.jid.split(separator: "@").first?.lowercased() {
-					cachedCardByPUUID[puuidKey] = cardID
-					cachedCardDateByPUUID[puuidKey] = Date()
+			pendingPresenceUpdates.append(update)
+			if presenceFlushTask == nil {
+				presenceFlushTask = Task { @MainActor [weak self] in
+					try? await Task.sleep(for: .milliseconds(120))
+					guard !Task.isCancelled else { return }
+					self?.flushPendingPresenceUpdates()
 				}
 			}
-			if let tier = update.competitiveTier {
-				friend.competitiveTier = tier
-			}
-			if let level = update.accountLevel {
-				friend.accountLevel = level
-			}
-			friend.lastOnline = Self.newerDate(friend.lastOnline, update.lastOnline)
-			
-			if update.status == .offline {
-				if update.resource.isEmpty {
-					resourcesByJID[update.jid] = [:]
-				} else {
-					resourcesByJID[update.jid]?[update.resource] = nil
-				}
-			} else {
-				resourcesByJID[update.jid, default: [:]][update.resource] = update
-			}
-			
-			if let best = Self.pickBestPresence(from: resourcesByJID[update.jid]?.values ?? Dictionary<String, XMPPPresenceUpdate>().values) {
-				friend.status = best.status
-				friend.gameTitle = best.gameTitle
-				friend.statusText = best.statusText
-				friend.mapPath = best.mapPath
-				friend.queueID = best.queueID
-				friend.provisioningFlow = best.provisioningFlow
-				friend.allyScore = best.allyScore
-				friend.enemyScore = best.enemyScore
-				friend.partyID = best.partyID
-				friend.partySize = best.partySize
-				friend.maxPartySize = best.maxPartySize
-				friend.isPartyOwner = best.isPartyOwner
-				if let tier = best.competitiveTier { friend.competitiveTier = tier }
-				if let level = best.accountLevel { friend.accountLevel = level }
-				if let card = best.playerCardID { friend.playerCardID = card }
-			} else {
-				friend.status = .offline
-				friend.gameTitle = nil
-				friend.statusText = nil
-				friend.mapPath = nil
-				friend.queueID = nil
-				friend.provisioningFlow = nil
-				friend.allyScore = nil
-				friend.enemyScore = nil
-				friend.partyID = nil
-				friend.partySize = nil
-				friend.maxPartySize = nil
-				friend.isPartyOwner = false
-				if friend.lastOnline == nil && (wasOnline || update.lastOnline != nil) {
-					friend.lastOnline = update.lastOnline ?? Date()
-				}
-			}
-			
-			friendsByJID[update.jid] = friend
-			lastPresenceAt = Date()
-			scheduleCacheSave()
 			
 		case .messageReceived(let msg):
 			let peer = canonicalJID(for: msg.peerJID)
@@ -607,6 +748,111 @@ final class SocialManager: ObservableObject {
 				saveCacheNow()
 			}
 		}
+	}
+	
+	private func flushPendingPresenceUpdates() {
+		presenceFlushTask?.cancel()
+		presenceFlushTask = nil
+		guard !pendingPresenceUpdates.isEmpty else { return }
+		
+		let batch = pendingPresenceUpdates
+		pendingPresenceUpdates.removeAll(keepingCapacity: true)
+		
+		var updated = friendsByJID
+		var didChange = false
+		let now = Date()
+		
+		for update in batch {
+			if applyPresenceUpdate(update, into: &updated, now: now) {
+				didChange = true
+			}
+		}
+		
+		if didChange {
+			commitFriends(updated)
+		}
+		lastPresenceAt = now
+		scheduleCacheSave()
+	}
+	
+	private func applyPresenceUpdate(
+		_ update: XMPPPresenceUpdate,
+		into friends: inout [String: XMPPFriend],
+		now: Date
+	) -> Bool {
+		let original = friends[update.jid]
+		var friend = original ?? XMPPFriend(
+			jid: update.jid,
+			puuid: update.jid.components(separatedBy: "@").first.flatMap(User.ID.init),
+			gameName: "",
+			tagLine: "",
+			subscription: "both"
+		)
+		let wasOnline = friend.status != .offline
+		
+		if let cardID = update.playerCardID {
+			friend.playerCardID = cardID
+			if !cardID.isPseudoNull,
+			   let puuidKey = friend.puuid?.description.lowercased() ?? update.jid.split(separator: "@").first?.lowercased() {
+				cachedCardByPUUID[puuidKey] = cardID
+				cachedCardDateByPUUID[puuidKey] = now
+			}
+		}
+		if let tier = update.competitiveTier {
+			friend.competitiveTier = tier
+		}
+		if let level = update.accountLevel {
+			friend.accountLevel = level
+		}
+		friend.lastOnline = Self.newerDate(friend.lastOnline, update.lastOnline)
+		
+		if update.status == .offline {
+			if update.resource.isEmpty {
+				resourcesByJID[update.jid] = [:]
+			} else {
+				resourcesByJID[update.jid]?[update.resource] = nil
+			}
+		} else {
+			resourcesByJID[update.jid, default: [:]][update.resource] = update
+		}
+		
+		if let best = Self.pickBestPresence(from: resourcesByJID[update.jid]?.values ?? Dictionary<String, XMPPPresenceUpdate>().values) {
+			friend.status = best.status
+			friend.gameTitle = best.gameTitle
+			friend.statusText = best.statusText
+			friend.mapPath = best.mapPath
+			friend.queueID = best.queueID
+			friend.provisioningFlow = best.provisioningFlow
+			friend.allyScore = best.allyScore
+			friend.enemyScore = best.enemyScore
+			friend.partyID = best.partyID
+			friend.partySize = best.partySize
+			friend.maxPartySize = best.maxPartySize
+			friend.isPartyOwner = best.isPartyOwner
+			if let tier = best.competitiveTier { friend.competitiveTier = tier }
+			if let level = best.accountLevel { friend.accountLevel = level }
+			if let card = best.playerCardID { friend.playerCardID = card }
+		} else {
+			friend.status = .offline
+			friend.gameTitle = nil
+			friend.statusText = nil
+			friend.mapPath = nil
+			friend.queueID = nil
+			friend.provisioningFlow = nil
+			friend.allyScore = nil
+			friend.enemyScore = nil
+			friend.partyID = nil
+			friend.partySize = nil
+			friend.maxPartySize = nil
+			friend.isPartyOwner = false
+			if friend.lastOnline == nil && (wasOnline || update.lastOnline != nil) {
+				friend.lastOnline = update.lastOnline ?? now
+			}
+		}
+		
+		guard friend != original else { return false }
+		friends[update.jid] = friend
+		return true
 	}
 	
 	private static func newerDate(_ lhs: Date?, _ rhs: Date?) -> Date? {
@@ -654,7 +900,8 @@ final class SocialManager: ObservableObject {
 	private func diffRosterForChanges(
 		oldSubs: [String: String],
 		oldFriends: [String: XMPPFriend],
-		newSubs: [String: String]
+		newSubs: [String: String],
+		newFriends: [String: XMPPFriend]
 	) {
 		let now = Date()
 		var appended: [FriendListChangeEvent] = []
@@ -673,7 +920,7 @@ final class SocialManager: ObservableObject {
 					kind: .removedFriend, timestamp: now
 				))
 			} else if oldSub == "pending_out" && newSub == "both" {
-				let current = friendsByJID[jid]
+				let current = newFriends[jid]
 				appended.append(FriendListChangeEvent(
 					jid: jid,
 					puuid: current?.puuid ?? puuid,
@@ -691,7 +938,7 @@ final class SocialManager: ObservableObject {
 		}
 		
 		for (jid, newSub) in newSubs where oldSubs[jid] == nil && newSub == "both" {
-			let current = friendsByJID[jid]
+			let current = newFriends[jid]
 			appended.append(FriendListChangeEvent(
 				jid: jid,
 				puuid: current?.puuid,
@@ -716,6 +963,9 @@ final class SocialManager: ObservableObject {
 	private func loadCacheIfNeeded(for userID: User.ID) {
 		guard loadedCacheUserID != userID else { return }
 		loadedCacheUserID = userID
+		presenceFlushTask?.cancel()
+		presenceFlushTask = nil
+		pendingPresenceUpdates.removeAll()
 		myPresence = nil
 		locallyRemovedJIDs = []
 		resourcesByJID = [:]
@@ -723,7 +973,7 @@ final class SocialManager: ObservableObject {
 		
 		let allCaches = LocalJSONStore.load([String: CachedSocialAccount].self, from: Self.cacheFilename) ?? [:]
 		guard let cached = allCaches[cacheKey(for: userID)] else {
-			friendsByJID = [:]
+			commitFriends([:])
 			snapshotSubscriptions = [:]
 			changeEvents = []
 			messagesByJID = [:]
@@ -759,7 +1009,7 @@ final class SocialManager: ObservableObject {
 			}
 		}
 		
-		friendsByJID = restoredFriends
+		commitFriends(restoredFriends)
 		snapshotSubscriptions = cached.snapshotSubscriptions
 		changeEvents = cached.changeEvents
 		messagesByJID = cached.messagesByJID

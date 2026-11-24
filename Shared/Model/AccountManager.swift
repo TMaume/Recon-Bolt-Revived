@@ -211,6 +211,8 @@ final class StoredAccount: ObservableObject, Identifiable {
 		session: session,
 		urlSessionOverride: .init(configuration: .ephemeral <- {
 			$0.httpAdditionalHeaders = ["User-Agent": ""]
+			$0.timeoutIntervalForRequest = 20
+			$0.timeoutIntervalForResource = 60
 		})
 	) <- {
 		sessionUpdateListener = $0.onSessionUpdate { [weak self] session in

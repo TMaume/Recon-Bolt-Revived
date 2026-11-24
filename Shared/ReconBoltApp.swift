@@ -48,6 +48,7 @@ struct ReconBoltApp: App {
 					.environmentObject(playerSettingsSnapshotStore)
 					.environmentObject(seasonGoalStore)
 					.environmentObject(socialManager)
+					.environmentObject(socialManager.onlineCountModel)
 					.environmentObject(lineupsManager)
 					.environment(\.configs, configManager.configs())
 					.environment(\.assets, assetManager.assets)
@@ -69,6 +70,10 @@ struct ReconBoltApp: App {
 				.task(id: accountManager.activeAccount?.id) {
 					await socialManager.connectIfNeeded(using: accountManager.activeAccount?.client)
 				}
+				.modifier(SocialSceneLifecycleModifier(
+					socialManager: socialManager,
+					accountManager: accountManager
+				))
 				.task(id: assetManager.assets?.version) {
 					guard let version = assetManager.assets?.version else { return }
 					accountManager.clientVersion = version.riotClientVersion
@@ -97,6 +102,33 @@ struct ReconBoltApp: App {
 		} catch {
 			print("could not set audio session category: \(error)")
 		}
+	}
+}
+
+private struct SocialSceneLifecycleModifier: ViewModifier {
+	let socialManager: SocialManager
+	let accountManager: AccountManager
+	
+	@Environment(\.scenePhase) private var scenePhase
+	@State private var lastPhase: ScenePhase?
+	
+	func body(content: Content) -> some View {
+		content
+			.task(id: scenePhase) {
+				let previous = lastPhase
+				lastPhase = scenePhase
+				if previous == nil {
+					if scenePhase == .background {
+						socialManager.handleDidEnterBackground()
+					}
+					return
+				}
+				if scenePhase == .background {
+					socialManager.handleDidEnterBackground()
+				} else if scenePhase == .active, previous != .active {
+					await socialManager.handleSceneActivation(using: accountManager.activeAccount?.client)
+				}
+			}
 	}
 }
 

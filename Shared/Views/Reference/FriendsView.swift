@@ -330,10 +330,11 @@ struct FriendsView: View {
 	
 	private var valorantPartyGroups: [PartyGroup] {
 		let ownPartyID = socialManager.myPresence?.partyID
+		let query = trimmedSearch
 		let activeValFriends = socialManager.friends.filter { friend in
 			guard !friend.isIncomingRequest && !friend.isOutgoingRequest && friend.status != .offline else { return false }
 			if let ownPartyID, friend.partyID == ownPartyID { return false }
-			return friend.gameTitle == "VALORANT" && matchesSearch(friend)
+			return friend.gameTitle == "VALORANT" && matchesSearch(friend, query: query)
 		}
 		
 		var buckets: [String: [XMPPFriend]] = [:]
@@ -443,8 +444,9 @@ struct FriendsView: View {
 	
 	@ViewBuilder
 	private var friendRequestsSection: some View {
-		let incoming = socialManager.friends.filter { $0.isIncomingRequest && matchesSearch($0) }
-		let outgoing = socialManager.friends.filter { $0.isOutgoingRequest && matchesSearch($0) }
+		let query = trimmedSearch
+		let incoming = socialManager.friends.filter { $0.isIncomingRequest && matchesSearch($0, query: query) }
+		let outgoing = socialManager.friends.filter { $0.isOutgoingRequest && matchesSearch($0, query: query) }
 		
 		if !incoming.isEmpty {
 			VStack(alignment: .leading, spacing: 8) {
@@ -565,12 +567,13 @@ struct FriendsView: View {
 	
 	@ViewBuilder
 	private var otherGamesSection: some View {
+		let query = trimmedSearch
 		let otherActive = socialManager.friends.filter { friend in
 			!friend.isIncomingRequest
 			&& !friend.isOutgoingRequest
 			&& friend.status != .offline
 			&& friend.gameTitle != "VALORANT"
-			&& matchesSearch(friend)
+			&& matchesSearch(friend, query: query)
 		}
 		let byGame = Dictionary(grouping: otherActive) { $0.gameTitle ?? "Online" }
 		let orderedGames = byGame.keys.sorted()
@@ -600,9 +603,10 @@ struct FriendsView: View {
 	
 	@ViewBuilder
 	private var offlineFriendsSection: some View {
+		let query = trimmedSearch
 		let offline = socialManager.friends
 			.filter {
-				!$0.isIncomingRequest && !$0.isOutgoingRequest && $0.status == .offline && matchesSearch($0)
+				!$0.isIncomingRequest && !$0.isOutgoingRequest && $0.status == .offline && matchesSearch($0, query: query)
 			}
 			.sorted { compareFriends($0, $1, isOffline: true) }
 		if !offline.isEmpty {
@@ -612,7 +616,7 @@ struct FriendsView: View {
 					.foregroundStyle(.secondary)
 					.padding(.horizontal, 4)
 				
-				VStack(spacing: 0) {
+				LazyVStack(spacing: 0) {
 					ForEach(Array(offline.enumerated()), id: \.element.id) { index, friend in
 						friendPartyRow(friend, isOfflineStyle: true)
 						if index < offline.count - 1 {
@@ -685,11 +689,11 @@ struct FriendsView: View {
 		let hasUnread = (socialManager.unreadByJID[friend.jid] ?? 0) > 0
 		let opensProfileDirectly = settings.openProfileDirectly && !hasUnread && friend.puuid != nil
 		
-		return NavigationLink {
+		return Button {
 			if opensProfileDirectly, let puuid = friend.puuid {
-				MatchListView(userID: puuid)
+				contextProfileUserID = puuid
 			} else {
-				ChatView(friend: friend)
+				contextChatFriend = friend
 			}
 		} label: {
 			HStack(spacing: 12) {
@@ -891,11 +895,18 @@ struct FriendsView: View {
 		raw.replacingOccurrences(of: "_", with: " ").capitalized
 	}
 	
+	private var trimmedSearch: String {
+		search.isEmpty ? "" : search.trimmingCharacters(in: .whitespacesAndNewlines)
+	}
+	
 	private func matchesSearch(_ friend: XMPPFriend) -> Bool {
-		let trimmed = search.trimmingCharacters(in: .whitespacesAndNewlines)
-		guard !trimmed.isEmpty else { return true }
-		return friend.displayName.localizedCaseInsensitiveContains(trimmed)
-			|| (friend.note?.localizedCaseInsensitiveContains(trimmed) ?? false)
+		matchesSearch(friend, query: trimmedSearch)
+	}
+	
+	private func matchesSearch(_ friend: XMPPFriend, query: String) -> Bool {
+		guard !query.isEmpty else { return true }
+		return friend.displayName.localizedCaseInsensitiveContains(query)
+			|| (friend.note?.localizedCaseInsensitiveContains(query) ?? false)
 	}
 }
 
@@ -1351,7 +1362,7 @@ struct FriendListChangesView: View {
 								.font(.headline.weight(.bold))
 								.padding(.horizontal, 4)
 							
-							VStack(spacing: 0) {
+							LazyVStack(spacing: 0) {
 								ForEach(Array(section.events.enumerated()), id: \.element.id) { index, event in
 									changeEventRow(event)
 									if index < section.events.count - 1 {
@@ -1426,11 +1437,15 @@ struct FriendListChangesView: View {
 		.frame(maxWidth: .infinity, alignment: .leading)
 	}
 	
-	private var checkedRelativeString: String {
-		guard let date = socialManager.lastSyncedAt else { return "just now" }
+	private static let relativeFormatter: RelativeDateTimeFormatter = {
 		let formatter = RelativeDateTimeFormatter()
 		formatter.unitsStyle = .full
-		return formatter.localizedString(for: date, relativeTo: .now)
+		return formatter
+	}()
+	
+	private var checkedRelativeString: String {
+		guard let date = socialManager.lastSyncedAt else { return "just now" }
+		return Self.relativeFormatter.localizedString(for: date, relativeTo: .now)
 	}
 	
 	private struct EventGroup {
@@ -1552,8 +1567,6 @@ struct FriendListChangesView: View {
 	}
 	
 	private func eventRelativeString(_ date: Date) -> String {
-		let formatter = RelativeDateTimeFormatter()
-		formatter.unitsStyle = .full
-		return formatter.localizedString(for: date, relativeTo: .now)
+		Self.relativeFormatter.localizedString(for: date, relativeTo: .now)
 	}
 }
