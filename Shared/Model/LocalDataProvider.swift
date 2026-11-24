@@ -255,4 +255,57 @@ extension ValorantClient {
 			}
 		}
 	}
+	
+	func prefetchPlayerPreview(for user: User, latestMatchID: Match.ID?) async -> Player.Identity? {
+		UsernameHistoryStore.record(user)
+		await LocalDataProvider.shared.userManager.store(user, asOf: .now)
+		
+		async let summaryTask: Void = {
+			try? await self.fetchCareerSummary(for: user.id)
+		}()
+		async let identityTask: Player.Identity? = self.resolvePlayerIdentity(
+			for: user.id,
+			latestMatchID: latestMatchID
+		)
+		
+		let (_, identity) = await (summaryTask, identityTask)
+		return identity
+	}
+	
+	private func resolvePlayerIdentity(for userID: User.ID, latestMatchID: Match.ID?) async -> Player.Identity? {
+		if userID == self.userID {
+			try? await fetchIdentity(for: userID)
+			return await LocalDataProvider.shared.playerIdentityManager.cachedObject(for: userID)
+		}
+		
+		if let latestMatchID {
+			try? await fetchMatchDetails(for: latestMatchID)
+			if let details = await LocalDataProvider.shared.matchDetailsManager.cachedObject(for: latestMatchID),
+			   let player = details.players.first(where: { $0.id == userID }) {
+				let identity = player.identity
+				await LocalDataProvider.shared.playerIdentityManager.store(
+					identity,
+					asOf: details.matchInfo.gameStart
+				)
+				return await LocalDataProvider.shared.playerIdentityManager.cachedObject(for: userID) ?? identity
+			}
+		}
+		
+		return await LocalDataProvider.shared.playerIdentityManager.cachedObject(for: userID)
+	}
+	
+	func backfillMissingIdentities(for entries: [(userID: User.ID, location: Location)]) async {
+		for (userID, location) in entries {
+			guard !Task.isCancelled else { return }
+			guard await LocalDataProvider.shared.playerIdentityManager.cachedObject(for: userID) == nil else {
+				continue
+			}
+			let scoped = self.in(location)
+			if userID == self.userID {
+				try? await scoped.fetchIdentity(for: userID)
+			} else if let latestMatchID = try? await scoped.getMatchHistory(userID: userID).first?.matchID {
+				_ = await scoped.resolvePlayerIdentity(for: userID, latestMatchID: latestMatchID)
+			}
+		}
+	}
 }

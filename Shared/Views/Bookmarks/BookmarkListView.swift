@@ -65,7 +65,7 @@ struct BookmarkListView: View {
 			
 			let unbookmarkedEntries = history.entries.filter { !bookmarkList.hasBookmark(for: $0.user) }
 			ForEach(unbookmarkedEntries) { entry in
-				userCell(id: entry.user)
+				userCell(id: entry.user, shouldAutoUpdate: shouldAutoUpdateRanks && selection == nil)
 					.environment(\.location, entry.location)
 			}
 			.onDelete { offsets in
@@ -74,6 +74,14 @@ struct BookmarkListView: View {
 			}
 		}
 		.headerProminence(.increased)
+		.valorantLoadTask(id: selection == nil ? history.entries : []) {
+			guard selection == nil, !history.entries.isEmpty else { return }
+			let unbookmarked = history.entries
+				.filter { !bookmarkList.hasBookmark(for: $0.user) }
+				.map { (userID: $0.user, location: $0.location) }
+			guard !unbookmarked.isEmpty else { return }
+			await $0.backfillMissingIdentities(for: unbookmarked)
+		}
 	}
 	
 	@ViewBuilder

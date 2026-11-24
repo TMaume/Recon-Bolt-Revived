@@ -10,6 +10,7 @@ struct LookupCell: View {
 	@FocusState private var focusedField: Field?
 	
 	@Environment(\.loadWithErrorAlerts) private var load
+	@Environment(\.assets) private var assets
 	@EnvironmentObject private var accountManager: AccountManager
 	
 	@ScaledMetric(relativeTo: .body) private var maxNameFieldWidth = 150
@@ -91,10 +92,18 @@ struct LookupCell: View {
 				guard let account = accountManager.activeAccount else {
 					throw APIError.sessionExpired(mfaRequired: false)
 				}
-				let (user, location) = try await account.client.lookUpPlayer(gameName: query.name, tagLine: query.tag)
-				LocalDataProvider.dataFetched(user)
+				let result = try await account.client.lookUpPlayerInfo(gameName: query.name, tagLine: query.tag)
+				let scopedClient = account.client.in(result.location)
+				let identity = await scopedClient.prefetchPlayerPreview(
+					for: result.user,
+					latestMatchID: result.latestMatchID
+				)
+				if let cardID = identity?.cardID,
+				   let smallArt = assets?.playerCards[cardID]?.smallArt {
+					_ = await ImageManager.shared.awaitImage(for: smallArt, bucket: .icon)
+				}
 				dispatchPrecondition(condition: .onQueue(.main))
-				history.lookedUp(user.id, location: location)
+				history.lookedUp(result.user.id, location: result.location)
 			}
 		}
 	}
