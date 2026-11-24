@@ -29,9 +29,42 @@ final class UsernameHistoryStore: ObservableObject {
 	@Published private(set) var recordsByPlayer: [User.ID: [NameHistoryRecord]] = [:]
 	
 	private let filename = "UsernameHistory.v1.json"
+	private var hasLoadedFromDisk = false
+	private var initialLoadTask: Task<Void, Never>?
+	private var debouncedSaveTask: Task<Void, Never>?
 	
 	init() {
-		recordsByPlayer = LocalJSONStore.load([User.ID: [NameHistoryRecord]].self, from: filename) ?? [:]
+		initialLoadTask = Task { @MainActor [weak self] in
+			guard let self else { return }
+			let diskRecords = await LocalJSONStore.loadAsync([User.ID: [NameHistoryRecord]].self, from: self.filename) ?? [:]
+			self.mergeDiskRecords(diskRecords)
+		}
+	}
+	
+	private func mergeDiskRecords(_ diskRecords: [User.ID: [NameHistoryRecord]]) {
+		hasLoadedFromDisk = true
+		guard !diskRecords.isEmpty else { return }
+		
+		if recordsByPlayer.isEmpty {
+			recordsByPlayer = diskRecords
+			return
+		}
+		
+		var merged = diskRecords
+		for (id, inMemoryList) in recordsByPlayer {
+			var list = merged[id] ?? []
+			for entry in inMemoryList {
+				if let idx = list.lastIndex(where: { $0.gameName == entry.gameName && $0.tagLine == entry.tagLine }) {
+					list[idx].firstSeen = min(list[idx].firstSeen, entry.firstSeen)
+					list[idx].lastSeen = max(list[idx].lastSeen, entry.lastSeen)
+				} else {
+					list.append(entry)
+				}
+			}
+			list.sort { $0.firstSeen < $1.firstSeen }
+			merged[id] = list
+		}
+		recordsByPlayer = merged
 	}
 	
 	nonisolated static func record(_ user: User) {
@@ -44,22 +77,52 @@ final class UsernameHistoryStore: ObservableObject {
 		let valid = players.filter { !$0.gameName.isEmpty }
 		guard !valid.isEmpty else { return }
 		Task { @MainActor in
-			for player in valid {
-				shared.record(id: player.id, gameName: player.gameName, tagLine: player.tagLine, persistImmediately: false)
+			shared.recordBatch(valid)
+		}
+	}
+	
+	private func recordBatch(_ players: [Player]) {
+		let now = Date()
+		var working = recordsByPlayer
+		var didChange = false
+		for player in players {
+			if applyRecord(id: player.id, gameName: player.gameName, tagLine: player.tagLine, now: now, into: &working) {
+				didChange = true
 			}
-			shared.persist()
+		}
+		if didChange {
+			recordsByPlayer = working
+			schedulePersist()
 		}
 	}
 	
 	func record(id: User.ID, gameName: String, tagLine: String, persistImmediately: Bool = true) {
+		var working = recordsByPlayer
+		guard applyRecord(id: id, gameName: gameName, tagLine: tagLine, now: Date(), into: &working) else {
+			return
+		}
+		recordsByPlayer = working
+		if persistImmediately {
+			schedulePersist()
+		}
+	}
+	
+	private func applyRecord(
+		id: User.ID,
+		gameName: String,
+		tagLine: String,
+		now: Date,
+		into map: inout [User.ID: [NameHistoryRecord]]
+	) -> Bool {
 		let cleanName = gameName.trimmingCharacters(in: .whitespacesAndNewlines)
 		let cleanTag = tagLine.trimmingCharacters(in: .whitespacesAndNewlines)
-		guard !cleanName.isEmpty else { return }
+		guard !cleanName.isEmpty else { return false }
 		
-		var history = recordsByPlayer[id] ?? []
-		let now = Date()
-		
+		var history = map[id] ?? []
 		if let latest = history.last, latest.gameName == cleanName, latest.tagLine == cleanTag {
+			guard now.timeIntervalSince(latest.lastSeen) >= 3600 else {
+				return false
+			}
 			history[history.count - 1].lastSeen = now
 		} else {
 			history.append(
@@ -71,10 +134,8 @@ final class UsernameHistoryStore: ObservableObject {
 				)
 			)
 		}
-		recordsByPlayer[id] = history
-		if persistImmediately {
-			persist()
-		}
+		map[id] = history
+		return true
 	}
 	
 	func allTimelines() -> [PlayerNameTimeline] {
@@ -85,11 +146,28 @@ final class UsernameHistoryStore: ObservableObject {
 	}
 	
 	func clearHistory(for id: User.ID) {
+		debouncedSaveTask?.cancel()
 		recordsByPlayer.removeValue(forKey: id)
-		persist()
+		Task { @MainActor [weak self] in
+			guard let self else { return }
+			if let loadTask = self.initialLoadTask, !self.hasLoadedFromDisk {
+				await loadTask.value
+			}
+			self.recordsByPlayer.removeValue(forKey: id)
+			LocalJSONStore.save(self.recordsByPlayer, to: self.filename)
+		}
 	}
 	
-	private func persist() {
-		LocalJSONStore.save(recordsByPlayer, to: filename)
+	private func schedulePersist() {
+		debouncedSaveTask?.cancel()
+		debouncedSaveTask = Task { @MainActor [weak self] in
+			try? await Task.sleep(for: .seconds(2))
+			guard !Task.isCancelled, let self else { return }
+			if let loadTask = self.initialLoadTask, !self.hasLoadedFromDisk {
+				await loadTask.value
+			}
+			guard !Task.isCancelled else { return }
+			LocalJSONStore.save(self.recordsByPlayer, to: self.filename)
+		}
 	}
 }

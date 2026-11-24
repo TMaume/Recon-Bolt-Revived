@@ -32,6 +32,7 @@ struct StorageBreakdown: Sendable {
 			summaryURL.lastPathComponent,
 			userURL.lastPathComponent,
 			identityURL.lastPathComponent,
+			AssetManager.storedFileURL.lastPathComponent,
 			AssetManager.backupFileURL.lastPathComponent,
 		]
 		

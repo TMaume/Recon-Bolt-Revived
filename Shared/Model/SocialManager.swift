@@ -100,6 +100,8 @@ final class SocialManager: ObservableObject {
 	private let client = XMPPClient()
 	private var connectedUserID: User.ID?
 	private var loadedCacheUserID: User.ID?
+	private var cachedAccountsByKey: [String: CachedSocialAccount]?
+	private var loadAllCachesTask: Task<[String: CachedSocialAccount], Never>?
 	private var activeClient: ValorantClient?
 	private var connectAttempt = 0
 	private var connectTask: Task<Void, Never>?
@@ -192,7 +194,7 @@ final class SocialManager: ObservableObject {
 		}
 		
 		activeClient = apiClient
-		loadCacheIfNeeded(for: apiClient.userID)
+		await loadCacheIfNeeded(for: apiClient.userID)
 		
 		if connectedUserID == apiClient.userID {
 			if connectionState == .connected {
@@ -223,7 +225,6 @@ final class SocialManager: ObservableObject {
 		connectAttempt += 1
 		let attempt = connectAttempt
 		activeClient = apiClient
-		loadCacheIfNeeded(for: apiClient.userID)
 		connectedUserID = apiClient.userID
 		connectionState = .connecting
 		if clearExisting {
@@ -239,6 +240,8 @@ final class SocialManager: ObservableObject {
 			}
 			PerfMonitor.log("XMPP", "reconnect start attempt=\(attempt) user=\(apiClient.userID)")
 			await self.client.disconnect()
+			guard attempt == self.connectAttempt, !Task.isCancelled else { return }
+			await self.loadCacheIfNeeded(for: apiClient.userID)
 			guard attempt == self.connectAttempt, !Task.isCancelled else { return }
 			do {
 				try await self.client.connect(client: apiClient) { [weak self] event in
@@ -344,7 +347,7 @@ final class SocialManager: ObservableObject {
 		isInBackground = false
 		guard let apiClient else { return }
 		activeClient = apiClient
-		loadCacheIfNeeded(for: apiClient.userID)
+		await loadCacheIfNeeded(for: apiClient.userID)
 		
 		switch connectionState {
 		case .disconnected, .failed:
@@ -960,7 +963,26 @@ final class SocialManager: ObservableObject {
 		userID.description.lowercased()
 	}
 	
-	private func loadCacheIfNeeded(for userID: User.ID) {
+	private func ensureAllCachesLoaded() async -> [String: CachedSocialAccount] {
+		if let cachedAccountsByKey {
+			return cachedAccountsByKey
+		}
+		if let loadAllCachesTask {
+			return await loadAllCachesTask.value
+		}
+		let task = Task {
+			await LocalJSONStore.loadAsync([String: CachedSocialAccount].self, from: Self.cacheFilename) ?? [:]
+		}
+		loadAllCachesTask = task
+		let loaded = await task.value
+		if cachedAccountsByKey == nil {
+			cachedAccountsByKey = loaded
+		}
+		loadAllCachesTask = nil
+		return cachedAccountsByKey ?? loaded
+	}
+	
+	private func loadCacheIfNeeded(for userID: User.ID) async {
 		guard loadedCacheUserID != userID else { return }
 		loadedCacheUserID = userID
 		presenceFlushTask?.cancel()
@@ -971,7 +993,14 @@ final class SocialManager: ObservableObject {
 		resourcesByJID = [:]
 		ownResources = [:]
 		
-		let allCaches = LocalJSONStore.load([String: CachedSocialAccount].self, from: Self.cacheFilename) ?? [:]
+		let allCaches: [String: CachedSocialAccount]
+		if let cachedAccountsByKey {
+			allCaches = cachedAccountsByKey
+		} else {
+			allCaches = await ensureAllCachesLoaded()
+			guard loadedCacheUserID == userID, lastSyncedAt == nil else { return }
+		}
+		
 		guard let cached = allCaches[cacheKey(for: userID)] else {
 			commitFriends([:])
 			snapshotSubscriptions = [:]
@@ -1032,8 +1061,8 @@ final class SocialManager: ObservableObject {
 		let trimmedMessages = messagesByJID.mapValues { list in
 			Array(list.suffix(Self.maxCachedMessagesPerConversation))
 		}
-		var allCaches = LocalJSONStore.load([String: CachedSocialAccount].self, from: Self.cacheFilename) ?? [:]
-		allCaches[cacheKey(for: userID)] = CachedSocialAccount(
+		let key = cacheKey(for: userID)
+		let snapshot = CachedSocialAccount(
 			friendsByJID: friendsByJID,
 			snapshotSubscriptions: snapshotSubscriptions,
 			changeEvents: changeEvents,
@@ -1042,7 +1071,19 @@ final class SocialManager: ObservableObject {
 			lastSyncedAt: lastSyncedAt,
 			lastPresenceAt: lastPresenceAt
 		)
-		LocalJSONStore.save(allCaches, to: Self.cacheFilename)
+		if var allCaches = cachedAccountsByKey {
+			allCaches[key] = snapshot
+			cachedAccountsByKey = allCaches
+			LocalJSONStore.save(allCaches, to: Self.cacheFilename)
+		} else {
+			Task { @MainActor [weak self] in
+				guard let self else { return }
+				var allCaches = await self.ensureAllCachesLoaded()
+				allCaches[key] = snapshot
+				self.cachedAccountsByKey = allCaches
+				LocalJSONStore.save(allCaches, to: Self.cacheFilename)
+			}
+		}
 	}
 	
 	private func isDuplicateMessage(_ lhs: XMPPChatMessage, _ rhs: XMPPChatMessage) -> Bool {
