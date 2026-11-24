@@ -10,6 +10,7 @@ struct LoadoutDetailsView: View {
 	@LocalData private var user: User?
 	@LocalData private var identity: Player.Identity?
 	@EnvironmentObject private var presetManager: LoadoutPresetManager
+	@EnvironmentObject private var favoritesManager: FavoritesManager
 	@Environment(\.valorantLoad) private var load
 	@Environment(\.assets) private var assets
 	
@@ -146,9 +147,9 @@ struct LoadoutDetailsView: View {
 			}
 		}
 		.task(id: loadout.subject) {
-			guard resolvedAccountLevel == 0 else { return }
 			await load { client in
-				if client.userID == loadout.subject {
+				await favoritesManager.refreshIfNeeded(using: client)
+				if resolvedAccountLevel == 0, client.userID == loadout.subject {
 					fetchedAccountLevel = try? await client.getAccountLevel()
 				}
 			}
@@ -475,6 +476,7 @@ struct LoadoutDetailsView_Previews: PreviewProvider {
 				.forPreviews()
 		}
 		.environmentObject(LoadoutPresetManager())
+		.environmentObject(FavoritesManager())
 		.navigationTitle("Loadout")
 		.withToolbar()
 	}

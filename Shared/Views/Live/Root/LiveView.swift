@@ -27,6 +27,7 @@ struct LiveView: View {
 	@Environment(\.valorantLoad) private var load
 	@Environment(\.assets) private var assets
 	@Environment(\.seasons) private var seasons
+	@EnvironmentObject private var favoritesManager: FavoritesManager
 	
 	@Namespace private var missionsBoxID
 	@Namespace private var storeBoxID
@@ -84,9 +85,10 @@ struct LiveView: View {
 			infoOrPlaceholder(placeholder: "Loadout not loaded!", loadoutInfo) { info in
 				LoadoutDetailsView(loadout: info.loadout, inventory: info.inventory)
 			}
-		} refresh: {
+		} refresh: { client in
 			do {
-				loadoutInfo = try await .init(using: $0)
+				loadoutInfo = try await .init(using: client)
+				await favoritesManager.refresh(using: client)
 			} catch Loadout.FetchError.uninitialized {
 				throw WrongAccountError(user: user)
 			}
@@ -238,6 +240,7 @@ struct LiveView_Previews: PreviewProvider {
 			userID: PreviewData.userID,
 			contractsProgress: PreviewData.contractsProgress
 		)
+		.environmentObject(FavoritesManager())
 		.withToolbar()
 	}
 }

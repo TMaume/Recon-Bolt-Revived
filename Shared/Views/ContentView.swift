@@ -210,6 +210,7 @@ struct ContentView_Previews: PreviewProvider {
 		.environmentObject(BookmarkList())
 		.environmentObject(LoadoutPresetManager())
 		.environmentObject(WishlistManager())
+		.environmentObject(FavoritesManager())
 		.environmentObject(ShopHistoryStore())
 		.environmentObject(UsernameHistoryStore.shared)
 		.environmentObject(PlayerSettingsSnapshotStore())
