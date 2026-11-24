@@ -89,69 +89,76 @@ struct MatchDetailsView: View {
 	@ViewBuilder
 	private func mainContent(for focusedPlayer: Player) -> some View {
 		ScrollView {
-			VStack(spacing: 16) {
-				MatchHeroBanner(
-					data: focusedData,
-					analytics: analytics,
-					focusedPlayer: focusedPlayer
-				)
-				.padding(.horizontal, 16)
-				
-				tabBar
-				
-				Group {
-					switch activeTab {
-					case .summary:
-						MatchSummaryTabView(
-							data: focusedData,
-							analytics: analytics,
-							focusedPlayer: focusedPlayer,
-							resolvedUsers: resolvedUsers
-						)
-						
-					case .scoreboard:
-						ScoreboardView(
-							data: data,
-							analytics: analytics,
-							focusedPlayerID: focusedPlayer.id,
-							groupedByTeam: groupedByTeam,
-							isCompact: isCompactScoreboard,
-							sort: scoreboardSort,
-							resolvedUsers: resolvedUsers,
-							highlight: $highlight,
-							onSelectFocus: { newID in
-								focusedPlayerID = newID
-							}
-						)
-						
-					case .rounds:
-						roundsTab
-						
-					case .duels:
-						MatchDuelsTabView(
-							data: focusedData,
-							analytics: analytics,
-							focusedTeamID: focusedPlayer.teamID,
-							resolvedUsers: resolvedUsers
-						)
-						
-					case .performance:
-						MatchPerformanceTabView(
-							data: focusedData,
-							analytics: analytics,
-							focusedPlayer: focusedPlayer,
-							resolvedUsers: resolvedUsers
-						)
-						
-					case .economy:
-						MatchEconomyTabView(
-							data: focusedData,
-							analytics: analytics,
-							focusedPlayer: focusedPlayer
-						)
-					}
+			LazyVStack(spacing: 12, pinnedViews: [.sectionHeaders]) {
+				if activeTab == .summary {
+					MatchHeroBanner(
+						data: focusedData,
+						analytics: analytics,
+						focusedPlayer: focusedPlayer
+					)
+					.padding(.horizontal, 16)
 				}
-				.padding(.horizontal, 16)
+				
+				Section {
+					Group {
+						switch activeTab {
+						case .summary:
+							MatchSummaryTabView(
+								data: focusedData,
+								analytics: analytics,
+								focusedPlayer: focusedPlayer,
+								resolvedUsers: resolvedUsers
+							)
+							
+						case .scoreboard:
+							ScoreboardView(
+								data: data,
+								analytics: analytics,
+								focusedPlayerID: focusedPlayer.id,
+								groupedByTeam: groupedByTeam,
+								isCompact: isCompactScoreboard,
+								sort: scoreboardSort,
+								resolvedUsers: resolvedUsers,
+								highlight: $highlight,
+								onSelectFocus: { newID in
+									focusedPlayerID = newID
+								}
+							)
+							
+						case .rounds:
+							roundsTab
+							
+						case .duels:
+							MatchDuelsTabView(
+								data: focusedData,
+								analytics: analytics,
+								focusedTeamID: focusedPlayer.teamID,
+								resolvedUsers: resolvedUsers
+							)
+							
+						case .performance:
+							MatchPerformanceTabView(
+								data: focusedData,
+								analytics: analytics,
+								focusedPlayer: focusedPlayer,
+								resolvedUsers: resolvedUsers
+							)
+							
+						case .economy:
+							MatchEconomyTabView(
+								data: focusedData,
+								analytics: analytics,
+								focusedPlayer: focusedPlayer
+							)
+						}
+					}
+					.padding(.horizontal, 16)
+					.padding(.top, 4)
+				} header: {
+					tabBar
+						.padding(.vertical, 6)
+						.background(Color.groupedBackground)
+				}
 			}
 			.padding(.top, 8)
 			.padding(.bottom, 24)
