@@ -142,22 +142,25 @@ struct LoadoutPresetsView: View {
 			)
 		}
 		.sheet(item: $bannerEditTarget) { target in
+			let currentTarget = presetManager.presets.first(where: { $0.id == target.id }) ?? target
 			PresetBannerPickerSheet(
-				selectedCardID: Binding(
-					get: { target.bannerCardID },
-					set: { newCard in
-						presetManager.setBanner(id: target.id, cardID: newCard, imageData: nil)
-					}
-				),
-				selectedImageData: Binding(
-					get: { target.bannerImageData },
-					set: { newData in
-						presetManager.setBanner(id: target.id, cardID: nil, imageData: newData)
-					}
+				currentSelection: PresetBannerChoice(
+					cardID: currentTarget.bannerCardID,
+					imageData: currentTarget.bannerImageData
 				),
 				equippedCardID: loadout.identity.card,
-				inventory: inventory
-			)
+				inventory: inventory,
+				accountID: loadout.subject
+			) { choice in
+				switch choice {
+				case .none:
+					presetManager.setBanner(id: target.id, cardID: nil, imageData: nil)
+				case .card(let cardID):
+					presetManager.setBanner(id: target.id, cardID: cardID, imageData: nil)
+				case .image(let data):
+					presetManager.setBanner(id: target.id, cardID: nil, imageData: data)
+				}
+			}
 		}
 		.alert(
 			"Rename Preset",
@@ -363,11 +366,26 @@ private struct NewLoadoutPresetSheet: View {
 			}
 			.sheet(isPresented: $showingBannerPicker) {
 				PresetBannerPickerSheet(
-					selectedCardID: $bannerCardID,
-					selectedImageData: $bannerImageData,
+					currentSelection: PresetBannerChoice(
+						cardID: bannerCardID,
+						imageData: bannerImageData
+					),
 					equippedCardID: currentLoadout.identity.card,
-					inventory: inventory
-				)
+					inventory: inventory,
+					accountID: currentLoadout.subject
+				) { choice in
+					switch choice {
+					case .none:
+						bannerCardID = nil
+						bannerImageData = nil
+					case .card(let cardID):
+						bannerCardID = cardID
+						bannerImageData = nil
+					case .image(let data):
+						bannerCardID = nil
+						bannerImageData = data
+					}
+				}
 			}
 		}
 	}
@@ -568,25 +586,27 @@ struct LoadoutPresetInspectorView: View {
 		.navigationBarTitleDisplayMode(.inline)
 		.sheet(isPresented: $showingBannerPicker) {
 			PresetBannerPickerSheet(
-				selectedCardID: Binding(
-					get: { preset.bannerCardID },
-					set: { newCard in
-						preset.bannerCardID = newCard
-						preset.bannerImageData = nil
-						presetManager.update(preset)
-					}
-				),
-				selectedImageData: Binding(
-					get: { preset.bannerImageData },
-					set: { newData in
-						preset.bannerImageData = newData
-						preset.bannerCardID = nil
-						presetManager.update(preset)
-					}
+				currentSelection: PresetBannerChoice(
+					cardID: preset.bannerCardID,
+					imageData: preset.bannerImageData
 				),
 				equippedCardID: currentLoadout.identity.card,
-				inventory: inventory
-			)
+				inventory: inventory,
+				accountID: preset.accountID ?? currentLoadout.subject
+			) { choice in
+				switch choice {
+				case .none:
+					preset.bannerCardID = nil
+					preset.bannerImageData = nil
+				case .card(let cardID):
+					preset.bannerCardID = cardID
+					preset.bannerImageData = nil
+				case .image(let data):
+					preset.bannerCardID = nil
+					preset.bannerImageData = data
+				}
+				presetManager.update(preset)
+			}
 		}
 		.alert("Rename Preset", isPresented: $showingRename) {
 			TextField("Name", text: $renameText)
@@ -759,22 +779,25 @@ struct FavoritesPresetsView: View {
 			)
 		}
 		.sheet(item: $bannerEditTarget) { target in
+			let currentTarget = presetManager.favoritesPresets.first(where: { $0.id == target.id }) ?? target
 			PresetBannerPickerSheet(
-				selectedCardID: Binding(
-					get: { target.bannerCardID },
-					set: { newCard in
-						presetManager.setFavoritesPresetBanner(id: target.id, cardID: newCard, imageData: nil)
-					}
-				),
-				selectedImageData: Binding(
-					get: { target.bannerImageData },
-					set: { newData in
-						presetManager.setFavoritesPresetBanner(id: target.id, cardID: nil, imageData: newData)
-					}
+				currentSelection: PresetBannerChoice(
+					cardID: currentTarget.bannerCardID,
+					imageData: currentTarget.bannerImageData
 				),
 				equippedCardID: equippedCardID,
-				inventory: inventory
-			)
+				inventory: inventory,
+				accountID: accountID
+			) { choice in
+				switch choice {
+				case .none:
+					presetManager.setFavoritesPresetBanner(id: target.id, cardID: nil, imageData: nil)
+				case .card(let cardID):
+					presetManager.setFavoritesPresetBanner(id: target.id, cardID: cardID, imageData: nil)
+				case .image(let data):
+					presetManager.setFavoritesPresetBanner(id: target.id, cardID: nil, imageData: data)
+				}
+			}
 		}
 		.alert(
 			"Rename Preset",
@@ -1007,11 +1030,26 @@ private struct NewFavoritesPresetSheet: View {
 			}
 			.sheet(isPresented: $showingBannerPicker) {
 				PresetBannerPickerSheet(
-					selectedCardID: $bannerCardID,
-					selectedImageData: $bannerImageData,
+					currentSelection: PresetBannerChoice(
+						cardID: bannerCardID,
+						imageData: bannerImageData
+					),
 					equippedCardID: equippedCardID,
-					inventory: inventory
-				)
+					inventory: inventory,
+					accountID: accountID
+				) { choice in
+					switch choice {
+					case .none:
+						bannerCardID = nil
+						bannerImageData = nil
+					case .card(let cardID):
+						bannerCardID = cardID
+						bannerImageData = nil
+					case .image(let data):
+						bannerCardID = nil
+						bannerImageData = data
+					}
+				}
 			}
 		}
 	}
@@ -1200,25 +1238,27 @@ struct FavoritesPresetInspectorView: View {
 		.navigationBarTitleDisplayMode(.inline)
 		.sheet(isPresented: $showingBannerPicker) {
 			PresetBannerPickerSheet(
-				selectedCardID: Binding(
-					get: { preset.bannerCardID },
-					set: { newCard in
-						preset.bannerCardID = newCard
-						preset.bannerImageData = nil
-						presetManager.updateFavoritesPreset(preset)
-					}
-				),
-				selectedImageData: Binding(
-					get: { preset.bannerImageData },
-					set: { newData in
-						preset.bannerImageData = newData
-						preset.bannerCardID = nil
-						presetManager.updateFavoritesPreset(preset)
-					}
+				currentSelection: PresetBannerChoice(
+					cardID: preset.bannerCardID,
+					imageData: preset.bannerImageData
 				),
 				equippedCardID: equippedCardID,
-				inventory: inventory
-			)
+				inventory: inventory,
+				accountID: accountID
+			) { choice in
+				switch choice {
+				case .none:
+					preset.bannerCardID = nil
+					preset.bannerImageData = nil
+				case .card(let cardID):
+					preset.bannerCardID = cardID
+					preset.bannerImageData = nil
+				case .image(let data):
+					preset.bannerCardID = nil
+					preset.bannerImageData = data
+				}
+				presetManager.updateFavoritesPreset(preset)
+			}
 		}
 		.alert("Rename Preset", isPresented: $showingRename) {
 			TextField("Name", text: $renameText)
