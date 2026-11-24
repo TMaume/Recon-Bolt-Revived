@@ -3,7 +3,7 @@ import ValorantAPI
 
 struct SessionRecapView: View {
 	var userID: User.ID
-	var sessions: [PlaySession]
+	private let lazySource: (matches: [CompetitiveUpdate], detailsByID: [Match.ID: MatchDetails])?
 	
 	@LocalData var user: User?
 	@LocalData var identity: Player.Identity?
@@ -11,12 +11,25 @@ struct SessionRecapView: View {
 	@Environment(\.assets) private var assets
 	@EnvironmentObject private var imageManager: ImageManager
 	
+	@State private var sessions: [PlaySession]
+	@State private var isBuildingSessions: Bool
 	@State private var selectedIndex = 0
 	@State private var sharingSession: PlaySession?
 	
 	init(userID: User.ID, sessions: [PlaySession]) {
 		self.userID = userID
-		self.sessions = sessions
+		self.lazySource = nil
+		self._sessions = State(initialValue: sessions)
+		self._isBuildingSessions = State(initialValue: false)
+		self._user = .init(id: userID)
+		self._identity = .init(id: userID)
+	}
+	
+	init(userID: User.ID, matches: [CompetitiveUpdate], detailsByID: [Match.ID: MatchDetails]) {
+		self.userID = userID
+		self.lazySource = (matches, detailsByID)
+		self._sessions = State(initialValue: [])
+		self._isBuildingSessions = State(initialValue: true)
 		self._user = .init(id: userID)
 		self._identity = .init(id: userID)
 	}
@@ -30,7 +43,17 @@ struct SessionRecapView: View {
 	var body: some View {
 		ScrollView {
 			VStack(alignment: .leading, spacing: 18) {
-				if sessions.isEmpty {
+				if isBuildingSessions {
+					VStack(spacing: 12) {
+						ProgressView()
+						Text("Building session recaps...")
+							.font(.subheadline)
+							.foregroundStyle(.secondary)
+					}
+					.frame(maxWidth: .infinity)
+					.padding(32)
+					.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+				} else if sessions.isEmpty {
 					VStack(spacing: 10) {
 						Image(systemName: "clock.badge.checkmark")
 							.font(.system(size: 38, weight: .light))
@@ -101,6 +124,18 @@ struct SessionRecapView: View {
 		}
 		.withLocalData($user, id: userID)
 		.withLocalData($identity, id: userID)
+		.task {
+			guard let lazySource else { return }
+			let uid = userID
+			let matches = lazySource.matches
+			let detailsByID = lazySource.detailsByID
+			let built = await Task.detached(priority: .userInitiated) {
+				SessionRecapBuilder.buildSessions(userID: uid, matches: matches, detailsByID: detailsByID)
+			}.value
+			guard !Task.isCancelled else { return }
+			sessions = built
+			isBuildingSessions = false
+		}
 	}
 	
 	private var sessionSelectorBar: some View {

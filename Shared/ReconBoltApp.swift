@@ -79,6 +79,7 @@ struct ReconBoltApp: App {
 	}
 	
 	private func onLaunch() {
+		PerfMonitor.log("PERF", "ReconBoltApp.onLaunch")
 		ReviewManager.registerUsage(points: 2)
 		AppSettings.applyGlobalTint(settings.effectiveAccentColor)
 		

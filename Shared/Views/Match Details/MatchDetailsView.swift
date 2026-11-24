@@ -24,30 +24,44 @@ struct MatchDetailsView: View {
 	@State private var isCompactScoreboard = false
 	@State private var scoreboardSort: MatchScoreboardSort = .acs
 	@State private var resolvedUsers: [Player.ID: User] = [:]
+	@State private var menuAgentIcons: [Player.ID: UIImage] = [:]
 	@State private var isRefreshingProfiles = false
 	@State private var isShowingShareSheet = false
 	
 	@Environment(\.valorantLoad) private var load
 	@Environment(\.assets) private var assets
 	
+	private final class MenuIconCache: @unchecked Sendable {
+		static let shared = MenuIconCache()
+		let cache = NSCache<NSString, UIImage>() <- {
+			$0.countLimit = 64
+		}
+	}
+	
+	private struct MenuIconTaskKey: Equatable {
+		var matchID: Match.ID
+		var version: AssetVersion?
+	}
+	
 	init(data: MatchViewData) {
 		self.data = data
 		self.analytics = MatchAnalytics(details: data.details)
 		let initialFocus = data.myself?.id
 			?? data.details.players.first(where: { $0.teamID != .neutral })?.id
-			?? data.details.players[0].id
+			?? data.details.players.first?.id
+			?? Player.ID()
 		self._focusedPlayerID = State(initialValue: initialFocus)
 	}
 	
-	private var focusedPlayer: Player {
+	private var focusedPlayer: Player? {
 		data.players[focusedPlayerID]
 			?? data.myself
-			?? data.details.players[0]
+			?? data.details.players.first
 	}
 	
 	private var focusedData: MatchViewData {
-		if focusedPlayer.id == data.myself?.id { return data }
-		return MatchViewData(details: data.details, userID: focusedPlayer.id)
+		if focusedPlayer?.id == data.myself?.id { return data }
+		return MatchViewData(details: data.details, userID: focusedPlayer?.id)
 	}
 	
 	private var availableTabs: [Tab] {
@@ -61,6 +75,18 @@ struct MatchDetailsView: View {
 	}
 	
 	var body: some View {
+		if let focusedPlayer {
+			mainContent(for: focusedPlayer)
+		} else {
+			Text("Match data unavailable.")
+				.foregroundStyle(.secondary)
+				.frame(maxWidth: .infinity, maxHeight: .infinity)
+				.background(Color.groupedBackground)
+		}
+	}
+	
+	@ViewBuilder
+	private func mainContent(for focusedPlayer: Player) -> some View {
 		ScrollView {
 			VStack(spacing: 16) {
 				tabBar
@@ -124,14 +150,14 @@ struct MatchDetailsView: View {
 		}
 		.background(Color.groupedBackground)
 		.safeAreaInset(edge: .bottom) {
-			focusedPlayerFloatingBar
+			focusedPlayerFloatingBar(for: focusedPlayer)
 		}
 		.navigationTitle(activeTab == .summary ? Text("Match Details", comment: "Match Details: title") : Text(""))
 		.navigationBarTitleDisplayMode(.inline)
 		.toolbar {
 			if activeTab != .summary {
 				ToolbarItem(placement: .principal) {
-					compactHeaderTitle
+					compactHeaderTitle(for: focusedPlayer)
 				}
 			}
 			
@@ -154,6 +180,9 @@ struct MatchDetailsView: View {
 		}
 		.task(id: data.details.id) {
 			await ensurePlayerNamesLoaded()
+		}
+		.task(id: MenuIconTaskKey(matchID: data.details.id, version: assets?.version)) {
+			await prepareMenuAgentIcons()
 		}
 	}
 	
@@ -200,7 +229,7 @@ struct MatchDetailsView: View {
 	}
 	
 	@ViewBuilder
-	private var compactHeaderTitle: some View {
+	private func compactHeaderTitle(for focusedPlayer: Player) -> some View {
 		let info = data.details.matchInfo
 		let mapName = assets?.maps[info.mapID]?.displayName ?? "Map"
 		HStack(spacing: 6) {
@@ -278,7 +307,7 @@ struct MatchDetailsView: View {
 	
 	// MARK: - Floating Focused Player Bar & Menu
 	
-	private var focusedPlayerFloatingBar: some View {
+	private func focusedPlayerFloatingBar(for focusedPlayer: Player) -> some View {
 		let menuPlayers = data.details.players
 			.filter { $0.teamID != .neutral }
 			.sorted { lhs, rhs in
@@ -360,7 +389,7 @@ struct MatchDetailsView: View {
 						Label {
 							Text(labelText)
 						} icon: {
-							if let uiIcon = menuAgentIcon(for: player) {
+							if let uiIcon = menuAgentIcons[player.id] {
 								Image(uiImage: uiIcon)
 							} else {
 								Image(systemName: "person.fill")
@@ -447,27 +476,56 @@ struct MatchDetailsView: View {
 		.padding(.bottom, 6)
 	}
 	
-	private func menuAgentIcon(for player: Player) -> UIImage? {
-		let source: UIImage?
-		if player.agentID == .abilityDraftAgent {
-			let name = player.teamID.gauntletRoboAssetName(
-				isOVariant: data.isGauntletOVariant(for: player),
-				isKillfeed: false
-			) ?? "gauntlet/robo_grey_x"
-			source = UIImage.bundledAsset(named: name)
-		} else if let aid = player.agentID {
-			source = assets?.agents[aid]?.displayIcon.load()
-		} else {
-			source = nil
+	private func prepareMenuAgentIcons() async {
+		let players = data.details.players
+		let assets = self.assets
+		var specs: [(playerID: Player.ID, cacheKey: String, bundledName: String?, assetImage: AssetImage?)] = []
+		specs.reserveCapacity(players.count)
+		for player in players {
+			if player.agentID == .abilityDraftAgent {
+				let name = player.teamID.gauntletRoboAssetName(
+					isOVariant: data.isGauntletOVariant(for: player),
+					isKillfeed: false
+				) ?? "gauntlet/robo_grey_x"
+				specs.append((player.id, "bundled:\(name)", name, nil))
+			} else if let aid = player.agentID, let asset = assets?.agents[aid]?.displayIcon {
+				specs.append((player.id, "asset:\(asset.url.absoluteString)", nil, asset))
+			}
 		}
-		guard let source else { return nil }
-		let side = CGFloat(22)
-		let size = CGSize(width: side, height: side)
-		let renderer = UIGraphicsImageRenderer(size: size)
-		return renderer.image { _ in
-			UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 5).addClip()
-			source.draw(in: CGRect(origin: .zero, size: size))
-		}.withRenderingMode(.alwaysOriginal)
+		
+		let resolved = await Task.detached(priority: .userInitiated) { () -> [Player.ID: UIImage] in
+			var result: [Player.ID: UIImage] = [:]
+			result.reserveCapacity(specs.count)
+			for spec in specs {
+				let nsKey = spec.cacheKey as NSString
+				if let cached = MenuIconCache.shared.cache.object(forKey: nsKey) {
+					result[spec.playerID] = cached
+					continue
+				}
+				let source: UIImage?
+				if let bundledName = spec.bundledName {
+					source = UIImage.bundledAsset(named: bundledName)
+				} else if let assetImage = spec.assetImage {
+					source = assetImage.load()
+				} else {
+					source = nil
+				}
+				guard let source else { continue }
+				let side: CGFloat = 22
+				let size = CGSize(width: side, height: side)
+				let renderer = UIGraphicsImageRenderer(size: size)
+				let rendered = renderer.image { _ in
+					UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 5).addClip()
+					source.draw(in: CGRect(origin: .zero, size: size))
+				}.withRenderingMode(.alwaysOriginal)
+				MenuIconCache.shared.cache.setObject(rendered, forKey: nsKey)
+				result[spec.playerID] = rendered
+			}
+			return result
+		}.value
+		
+		guard !Task.isCancelled else { return }
+		menuAgentIcons = resolved
 	}
 	
 	private func syncCachedUsers() async {

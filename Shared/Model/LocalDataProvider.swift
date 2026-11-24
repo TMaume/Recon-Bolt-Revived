@@ -55,11 +55,12 @@ final class LocalDataProvider {
 	static let shared = LocalDataProvider()
 	
 	static var onIdentitiesStored: (@Sendable ([Player.Identity], Date) -> Void)?
+	static var onIdentityAndTierResolved: (@Sendable (Player.Identity, Int?, Date) -> Void)?
 	
 	var matchListManager = LocalDataManager<MatchList>(ageCausingAutoUpdate: .minutes(5))
 	var careerSummaryManager = LocalDataManager<CareerSummary>(ageCausingAutoUpdate: .minutes(5))
 	var userManager = LocalDataManager<User>(ageCausingAutoUpdate: .hours(1))
-	var matchDetailsManager = LocalDataManager<MatchDetails>()
+	var matchDetailsManager = LocalDataManager<MatchDetails>(maxInMemoryEntries: 60)
 	var playerIdentityManager = LocalDataManager<Player.Identity>(ageCausingAutoUpdate: .minutes(5))
 	
 	private init() {}
@@ -121,10 +122,17 @@ final class LocalDataProvider {
 extension LocalDataManager where Object == MatchDetails {
 	func unloadedMatches(in matchList: MatchList, maxCount: Int) async -> [Match.ID]? {
 		let matches = matchList.matches.prefix(maxCount + 1) // need at least 1 more to know if it's been exceeded
-		let cached = await cachedObjects(for: matches.lazy.map(\.id))
-		let cachedIDs = Set(cached.lazy.map(\.id))
-		let unloaded = matches.prefix { !cachedIDs.contains($0.id) }
-		return unloaded.count > maxCount ? nil : unloaded.map(\.id)
+		var unloaded: [Match.ID] = []
+		for match in matches {
+			if await hasCachedFile(for: match.id) {
+				break
+			}
+			unloaded.append(match.id)
+			if unloaded.count > maxCount {
+				return nil
+			}
+		}
+		return unloaded
 	}
 }
 
@@ -231,12 +239,20 @@ extension ValorantClient {
 	
 	func fetchMatchDetails(for matchIDs: [Match.ID]) async throws {
 		try await withThrowingTaskGroup(of: Void.self) { group in
-			for matchID in matchIDs {
+			var iterator = matchIDs.makeIterator()
+			for _ in 0..<4 {
+				guard let nextID = iterator.next() else { break }
 				group.addTask {
-					try await self.fetchMatchDetails(for: matchID)
+					try await self.fetchMatchDetails(for: nextID)
 				}
 			}
-			for try await _ in group {} // TODO: might be able to remove this once the function stops being rethrows
+			while try await group.next() != nil {
+				if let nextID = iterator.next() {
+					group.addTask {
+						try await self.fetchMatchDetails(for: nextID)
+					}
+				}
+			}
 		}
 	}
 }

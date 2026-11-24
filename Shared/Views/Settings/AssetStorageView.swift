@@ -326,8 +326,9 @@ struct AssetStorageView: View {
 	
 	@MainActor
 	private func refreshSizes() async {
-		let assetSizes = assetManager.storageSizes()
-		let breakdown = await StorageBreakdown.compute(assetManager: assetManager)
+		async let assetSizesTask = AssetManager.computeStorageSizes()
+		async let breakdownTask = StorageBreakdown.compute(assetManager: assetManager)
+		let (assetSizes, breakdown) = await (assetSizesTask, breakdownTask)
 		installedBytes = assetSizes.installedBytes
 		backupBytes = assetSizes.backupBytes
 		widgetBytes = assetSizes.widgetBytes

@@ -26,10 +26,11 @@ struct LoadingSection: View {
 				VStack {
 					Text("Matches to load: **\(fetchCount)**", comment: "Stats: match loading")
 					
-					let oldestTime = sublist.last!.startTime
-					Text("Data going back to \(oldestTime, format: .dateTime.year().month().day())", comment: "Stats: match loading")
-						.foregroundStyle(.secondary)
-						.font(.footnote)
+					if let oldestTime = sublist.last?.startTime {
+						Text("Data going back to \(oldestTime, format: .dateTime.year().month().day())", comment: "Stats: match loading")
+							.foregroundStyle(.secondary)
+							.font(.footnote)
+					}
 					
 					HStack {
 						changeButtons(magnitude: 1)
@@ -159,7 +160,8 @@ struct LoadingSection: View {
 	}
 	
 	func clamp(_ count: Int) -> Int {
-		count.clamped(to: 1...matchList.matches.count)
+		guard !matchList.matches.isEmpty else { return 0 }
+		return count.clamped(to: 1...matchList.matches.count)
 	}
 }
 

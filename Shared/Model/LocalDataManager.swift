@@ -14,13 +14,22 @@ final class LocalDataManager<Object: Identifiable & Codable> where Object.ID: Lo
 	// not @Published so we have manual control, avoiding many publishes when working in bulk
 	private var cache: [Object.ID: Entry?] = [:] // nil values represent that we've confirmed there's no cache file
 	private var subjects: [Object.ID: Subject] = [:]
+	private var inFlightDiskLoads: [Object.ID: Task<Entry?, Never>] = [:]
+	private var accessOrder: [Object.ID] = []
+	private let maxInMemoryEntries: Int?
 	private let storage: Storage
+	
+	let changePublisher = PassthroughSubject<Void, Never>()
 	
 	nonisolated let folderURL: URL
 	/// When the object was last updated longer ago than this, it is automatically updated on next fetch.
 	let ageCausingAutoUpdate: TimeInterval?
 	
-	nonisolated init(localPath: String = "\(Object.self)", ageCausingAutoUpdate: TimeInterval? = nil) {
+	nonisolated init(
+		localPath: String = "\(Object.self)",
+		ageCausingAutoUpdate: TimeInterval? = nil,
+		maxInMemoryEntries: Int? = nil
+	) {
 		self.folderURL = FolderLocations.localData.appendingPathComponent(localPath) <- {
 			try? FileManager.default.createDirectory(
 				at: $0,
@@ -29,7 +38,22 @@ final class LocalDataManager<Object: Identifiable & Codable> where Object.ID: Lo
 			)
 		}
 		self.ageCausingAutoUpdate = ageCausingAutoUpdate
+		self.maxInMemoryEntries = maxInMemoryEntries
 		self.storage = .init(folderURL: folderURL)
+	}
+	
+	private func recordAccess(for id: Object.ID) {
+		guard maxInMemoryEntries != nil else { return }
+		accessOrder.removeAll { $0 == id }
+		accessOrder.append(id)
+	}
+	
+	private func evictIfNeeded() {
+		guard let limit = maxInMemoryEntries, limit > 0 else { return }
+		while accessOrder.count > limit {
+			let oldest = accessOrder.removeFirst()
+			cache.removeValue(forKey: oldest)
+		}
 	}
 	
 	func store<S: Sequence>(_ objects: S, asOf updateTime: Date) where S.Element == Object {
@@ -44,7 +68,10 @@ final class LocalDataManager<Object: Identifiable & Codable> where Object.ID: Lo
 		if let existing, existing.lastUpdate > updateTime { return }
 		
 		cache[object.id] = entry
+		recordAccess(for: object.id)
+		evictIfNeeded()
 		subjects[object.id]?.send(object)
+		changePublisher.send()
 		
 		Task.detached(priority: .utility) { [storage] in
 			await storage.trySave(entry)
@@ -55,24 +82,97 @@ final class LocalDataManager<Object: Identifiable & Codable> where Object.ID: Lo
 		cache[id]??.object
 	}
 	
+	func hasCachedFile(for id: Object.ID) async -> Bool {
+		if let cached = cache[id] {
+			return cached != nil
+		}
+		if let inFlight = inFlightDiskLoads[id] {
+			return await inFlight.value != nil
+		}
+		return await storage.fileExists(for: id)
+	}
+	
 	private func cachedEntry(for id: Object.ID) async -> Entry? {
 		if let cached = cache[id] {
+			if cached != nil {
+				recordAccess(for: id)
+			}
 			return cached
-		} else {
-			return await storage.tryLoadEntry(with: id) <- { cache[id] = $0 }
 		}
+		if let existingTask = inFlightDiskLoads[id] {
+			return await existingTask.value
+		}
+		let task = Task { [storage] in
+			await storage.tryLoadEntry(with: id)
+		}
+		inFlightDiskLoads[id] = task
+		let loaded = await task.value
+		inFlightDiskLoads[id] = nil
+		if let existing = cache[id] {
+			if existing != nil {
+				recordAccess(for: id)
+			}
+			return existing
+		}
+		cache[id] = loaded
+		if loaded != nil {
+			recordAccess(for: id)
+			evictIfNeeded()
+			changePublisher.send()
+		}
+		return loaded
 	}
 	
 	private func cachedEntries(for ids: Set<Object.ID>) async -> [Entry] {
-		let loaded = ids.compactMap { cache[$0] }
-		let notLoadedIDs = ids.subtracting(ids.lazy.filter(cache.keys.contains(_:)))
-		let notLoaded: [Object.ID: Entry] = .init(
-			values: await storage.tryLoadEntries(with: notLoadedIDs)
-		)
-		for id in notLoadedIDs {
-			cache[id] = notLoaded[id]
+		var resolved: [Entry] = []
+		var missingIDs: Set<Object.ID> = []
+		var pendingTasks: [(Object.ID, Task<Entry?, Never>)] = []
+		
+		for id in ids {
+			if let cached = cache[id] {
+				if let cached {
+					recordAccess(for: id)
+					resolved.append(cached)
+				}
+			} else if let inFlight = inFlightDiskLoads[id] {
+				pendingTasks.append((id, inFlight))
+			} else {
+				missingIDs.insert(id)
+			}
 		}
-		return loaded.compactMap { $0 } + notLoaded.values
+		
+		for (id, task) in pendingTasks {
+			if let entry = await task.value {
+				resolved.append(entry)
+				recordAccess(for: id)
+			}
+		}
+		
+		if !missingIDs.isEmpty {
+			let loadedEntries = await storage.tryLoadEntries(with: missingIDs)
+			let loadedByID = Dictionary(values: loadedEntries)
+			for id in missingIDs {
+				if let existing = cache[id] {
+					if let existing {
+						recordAccess(for: id)
+						resolved.append(existing)
+					}
+					continue
+				}
+				let entry = loadedByID[id]
+				cache[id] = entry
+				if let entry {
+					recordAccess(for: id)
+					resolved.append(entry)
+				}
+			}
+			evictIfNeeded()
+			if !loadedEntries.isEmpty {
+				changePublisher.send()
+			}
+		}
+		
+		return resolved
 	}
 	
 	func cachedObject(for id: Object.ID) async -> Object? {
@@ -106,13 +206,13 @@ final class LocalDataManager<Object: Identifiable & Codable> where Object.ID: Lo
 	private var inProgressUpdates: Set<Object.ID> = []
 	
 	func autoUpdateObject(for id: Object.ID, update: (Object?) async throws -> Object) async throws {
+		guard inProgressUpdates.insert(id).inserted else { return }
+		defer { inProgressUpdates.remove(id) }
+		
 		let cached = await cachedEntry(for: id)
 		if let cached, !shouldAutoUpdate(cached) {
 			return // nothing to do
 		}
-		
-		guard inProgressUpdates.insert(id).inserted else { return }
-		defer { inProgressUpdates.remove(id) }
 		
 		// auto-update necessary
 		try await tryLoad {
@@ -125,9 +225,16 @@ final class LocalDataManager<Object: Identifiable & Codable> where Object.ID: Lo
 	}
 	
 	func fetchIfNecessary(_ ids: [Object.ID], fetch: ([Object.ID]) async throws -> [Object]) async throws {
-		let cached = await cachedEntries(for: Set(ids))
-		guard cached.count < ids.count || cached.contains(where: shouldAutoUpdate) else { return }
-		try await fetch(ids) <- { store($0, asOf: .now) }
+		let uniqueIDs = Set(ids)
+		guard !uniqueIDs.isEmpty else { return }
+		let cached = await cachedEntries(for: uniqueIDs)
+		let freshIDs = Set(cached.lazy.filter { !self.shouldAutoUpdate($0) }.map(\.id))
+		let missingOrStale = uniqueIDs.subtracting(freshIDs)
+		let toFetch = missingOrStale.subtracting(inProgressUpdates)
+		guard !toFetch.isEmpty else { return }
+		inProgressUpdates.formUnion(toFetch)
+		defer { inProgressUpdates.subtract(toFetch) }
+		try await fetch(Array(toFetch)) <- { store($0, asOf: .now) }
 	}
 	
 	@discardableResult
@@ -161,6 +268,8 @@ final class LocalDataManager<Object: Identifiable & Codable> where Object.ID: Lo
 	
 	final actor Storage {
 		let folderURL: URL
+		private let decoder = JSONDecoder()
+		private let encoder = JSONEncoder()
 		
 		init(folderURL: URL) {
 			self.folderURL = folderURL
@@ -168,6 +277,10 @@ final class LocalDataManager<Object: Identifiable & Codable> where Object.ID: Lo
 		
 		private nonisolated func fileURL(for id: Object.ID) -> URL {
 			folderURL.appendingPathComponent("\(id.description).json")
+		}
+		
+		func fileExists(for id: Object.ID) -> Bool {
+			FileManager.default.fileExists(atPath: fileURL(for: id).path)
 		}
 		
 		func trySave(_ entry: Entry) {
@@ -220,8 +333,10 @@ extension LocalDataManager {
 			for id in idFilter {
 				cache.removeValue(forKey: id)
 			}
+			accessOrder.removeAll { idFilter.contains($0) }
 		} else {
 			cache = [:]
+			accessOrder = []
 		}
 	}
 }
@@ -267,9 +382,6 @@ extension LocalDataManager.Storage {
 		}
 	}
 }
-
-private let decoder = JSONDecoder()
-private let encoder = JSONEncoder()
 
 extension TimeInterval {
 	static func minutes(_ minutes: Double) -> Self {

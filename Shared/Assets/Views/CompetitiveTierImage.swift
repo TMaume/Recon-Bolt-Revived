@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct CompetitiveTierImage: View {
-	@EnvironmentObject private var imageManager: ImageManager
 	@Environment(\.seasons) private var seasons
 	
 	var tier: Int

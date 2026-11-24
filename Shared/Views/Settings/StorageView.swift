@@ -186,9 +186,6 @@ struct StorageView: View {
 		.task {
 			await reloadBreakdown()
 		}
-		.onAppear {
-			Task { await reloadBreakdown() }
-		}
 		.confirmationDialog("Remove All Accounts?", isPresented: $confirmRemoveAccounts, titleVisibility: .visible) {
 			Button("Remove All Accounts", role: .destructive) {
 				accountManager.clear()

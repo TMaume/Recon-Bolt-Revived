@@ -36,7 +36,7 @@ struct BookmarkListView: View {
 		
 		Section(header: Text("Bookmarks", comment: "Bookmark/Player List: section")) {
 			ForEach(bookmarkList.bookmarks, id: \.self) { entry in
-				userCell(id: entry.user, shouldAutoUpdate: shouldAutoUpdateRanks)
+				userCell(id: entry.user, shouldAutoUpdate: shouldAutoUpdateRanks && selection == nil)
 					.environment(\.location, entry.location)
 			}
 			.onDelete { bookmarkList.bookmarks.remove(atOffsets: $0) }
@@ -55,7 +55,8 @@ struct BookmarkListView: View {
 			}
 		}
 		.headerProminence(.increased)
-		.valorantLoadTask(id: bookmarkList.bookmarks) {
+		.valorantLoadTask(id: selection == nil ? bookmarkList.bookmarks : []) {
+			guard selection == nil, !bookmarkList.bookmarks.isEmpty else { return }
 			try await $0.fetchUsers(for: bookmarkList.bookmarks.map(\.id))
 		}
 		

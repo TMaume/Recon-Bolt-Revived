@@ -12,7 +12,21 @@ struct MatchListView: View {
 	@LocalData var identity: Player.Identity?
 	@State var isEditingFilter = false
 	@State private var agentMastery: AgentMastery? = nil
-	@UserDefault.State("MatchListView.filter") var filter = MatchListFilter()
+	@State private var masteryFetchTick = 0
+	@State private var matchCacheTick = 0
+	@State private var cachedDetailsSnapshot: [MatchDetails] = []
+	@State private var computedMastery: [AgentMasterySummary] = []
+	@State private var computedAccolades = AccoladesReport(
+		totalEarned: 0,
+		earnedTypesCount: 0,
+		totalTypesCount: AccoladeType.allCases.count,
+		scannedMatchesCount: 0,
+		allItems: [],
+		earnedItems: []
+	)
+	@State private var computedLatestSession: SessionRecapBuilder.LatestSessionPreview? = nil
+	@State private var computedGoalTrajectory: SeasonGoalTrajectory? = nil
+	@ObservedObject private var filterStore = MatchListFilterStore.shared
 	
 	@Environment(\.valorantLoad) private var load
 	@Environment(\.shouldAnonymize) private var shouldAnonymize
@@ -23,171 +37,165 @@ struct MatchListView: View {
 	@EnvironmentObject private var goalStore: SeasonGoalStore
 	@EnvironmentObject private var accountManager: AccountManager
 	@EnvironmentObject private var settings: AppSettings
-	@EnvironmentObject private var socialManager: SocialManager
 	
 	private var shownMatches: [CompetitiveUpdate] {
 		matchList?.matches ?? []
 	}
 	
-	private var cachedMatchDetails: [MatchDetails] {
-		shownMatches.prefix(40).compactMap {
-			LocalDataProvider.shared.matchDetailsManager.loadedObject(for: $0.id)
-		}
-	}
-	
-	private var detailsByID: [Match.ID: MatchDetails] {
-		Dictionary(uniqueKeysWithValues: cachedMatchDetails.map { ($0.id, $0) })
+	private struct CareerComputeKey: Equatable {
+		var userID: User.ID
+		var matchIDs: [Match.ID]
+		var totalMatchCount: Int
+		var cacheTick: Int
+		var masteryTick: Int
+		var currentActID: Act.ID?
+		var summarySeasonCount: Int
+		var summaryLatestID: Match.ID?
+		var activeGoal: SeasonGoal?
+		var assetsVersion: AssetVersion?
 	}
 	
 	var body: some View {
 		let currentAct = seasons?.currentAct()
 		let prevAct = assets?.seasons.actBefore(currentAct)
-		let mastery = AgentMasteryCalculator.buildFromRiot(
-			agentMastery,
+		let activeGoal: SeasonGoal? = {
+			guard userID == accountManager.activeAccount?.id else { return nil }
+			let goal = goalStore.goal(for: userID, actID: currentAct?.id)
+			return (goal?.showsOnProfile == true) ? goal : nil
+		}()
+		let computeKey = CareerComputeKey(
 			userID: userID,
-			matches: cachedMatchDetails,
-			assets: assets,
-			contractsDetails: nil,
-			currentAct: currentAct,
-			previousAct: prevAct
-		)
-		let accolades = AccoladesCalculator.compute(
-			userID: userID,
-			matches: cachedMatchDetails,
-			act: currentAct,
-			seasons: seasons
-		)
-		let sessions = SessionRecapBuilder.buildSessions(
-			userID: userID,
-			matches: shownMatches,
-			detailsByID: detailsByID
+			matchIDs: shownMatches.prefix(40).map(\.id),
+			totalMatchCount: shownMatches.count,
+			cacheTick: matchCacheTick,
+			masteryTick: masteryFetchTick,
+			currentActID: currentAct?.id,
+			summarySeasonCount: summary?.competitiveInfo?.bySeason?.count ?? 0,
+			summaryLatestID: summary?.latestUpdate?.id,
+			activeGoal: activeGoal,
+			assetsVersion: assets?.version
 		)
 		
 		ScrollView {
-			LazyVStack(spacing: 14) {
-				VStack(spacing: 0) {
-					PlayerIdentityCell(user: user, identity: identity)
-					CompetitiveSummaryCell(summary: summary, showThisActFooter: false)
-						.padding(.horizontal, 12)
-						.buttonStyle(.plain)
-				}
-				.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-				.clipped()
-				
-				CareerSummaryCollapsibleCard(summary: summary)
-				
-				AgentMasterySummaryBox(summaries: mastery, actEndDate: currentAct?.timeSpan.end)
-				
-				AccoladesSummaryBox(userID: userID, matches: cachedMatchDetails, report: accolades)
-				
-				if userID == accountManager.activeAccount?.id,
-				   let activeGoal = goalStore.goal(for: userID, actID: currentAct?.id),
-				   activeGoal.showsOnProfile {
-					let trajectory = SeasonGoalStore.compute(
-						goal: activeGoal,
-						summary: summary,
-						matchList: matchList,
-						currentAct: currentAct,
-						seasons: seasons
-					)
-					SeasonGoalProgressModule(goal: activeGoal, trajectory: trajectory, currentAct: currentAct)
-				}
-				
-				HStack(spacing: 12) {
-					NavigationLink {
-						SessionRecapView(userID: userID, sessions: sessions)
-					} label: {
-						VStack(alignment: .leading, spacing: 6) {
-							HStack(spacing: 6) {
-								Image(systemName: "clock.badge.checkmark")
-									.foregroundStyle(Color.accentColor)
-								Text("Session Recap")
-									.font(.subheadline.weight(.semibold))
-							}
-							if let latest = sessions.first {
-								Text(latest.startTime.formatted(.dateTime.day().month(.abbreviated)))
-									.font(.caption)
-									.foregroundStyle(.secondary)
-								HStack(spacing: 4) {
-									Text("\(latest.items.count) matches")
-										.foregroundStyle(.secondary)
-									if latest.netRRDelta != 0 {
-										Text("• \(latest.netRRDelta > 0 ? "+\(latest.netRRDelta)" : "\(latest.netRRDelta)") RR")
-											.foregroundStyle(latest.netRRDelta > 0 ? Color.green : Color.red)
-									}
-								}
-								.font(.caption.monospacedDigit())
-							} else {
-								Text("Open matches to build")
-									.font(.caption)
-									.foregroundStyle(.secondary)
-							}
-						}
-						.frame(maxWidth: .infinity, minHeight: 74, alignment: .topLeading)
-						.padding(12)
-						.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+			LazyVStack(spacing: settings.isCompactListStyle ? 4 : 12) {
+				VStack(spacing: 14) {
+					VStack(spacing: 0) {
+						PlayerIdentityCell(user: user, identity: identity)
+						CompetitiveSummaryCell(summary: summary, showThisActFooter: false)
+							.padding(.horizontal, 12)
+							.buttonStyle(.plain)
 					}
-					.buttonStyle(.plain)
+					.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+					.clipped()
 					
-					NavigationLink {
-						if let user, let matchList {
-							StatisticsContainer(user: user, matchList: matchList)
-						}
-					} label: {
-						VStack(alignment: .leading, spacing: 6) {
-							HStack(spacing: 6) {
-								Image(systemName: "chart.line.uptrend.xyaxis")
-									.foregroundStyle(Color.accentColor)
-								Text("View Stats")
-									.font(.subheadline.weight(.semibold))
-							}
-							Text("Win rate, K/D & more")
-								.font(.caption)
-								.foregroundStyle(.secondary)
-							Spacer(minLength: 0)
-						}
-						.frame(maxWidth: .infinity, minHeight: 74, alignment: .topLeading)
-						.padding(12)
-						.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+					CareerSummaryCollapsibleCard(summary: summary)
+					
+					AgentMasterySummaryBox(summaries: computedMastery, actEndDate: currentAct?.timeSpan.end)
+					
+					AccoladesSummaryBox(userID: userID, matches: cachedDetailsSnapshot, report: computedAccolades)
+					
+					if let activeGoal, let trajectory = computedGoalTrajectory {
+						SeasonGoalProgressModule(goal: activeGoal, trajectory: trajectory, currentAct: currentAct)
 					}
-					.buttonStyle(.plain)
-					.disabled(user == nil || matchList == nil)
-				}
-				
-				VStack(alignment: .leading, spacing: 10) {
-					Text("Matches", comment: "Match List: section")
-						.font(.subheadline.weight(.semibold))
-						.foregroundStyle(.secondary)
-						.padding(.leading, 4)
-						.padding(.top, 4)
 					
-					LazyVStack(spacing: settings.isCompactListStyle ? 4 : 12) {
-						ForEach(shownMatches) { match in
-							MatchCell(
-								match: match,
+					HStack(spacing: 12) {
+						NavigationLink {
+							SessionRecapView(
 								userID: userID,
-								filter: filter,
-								inList: false,
-								isCompact: settings.isCompactListStyle
+								matches: shownMatches,
+								detailsByID: Dictionary(uniqueKeysWithValues: cachedDetailsSnapshot.map { ($0.id, $0) })
 							)
-						}
-					}
-					
-					if matchList?.canLoadOlderMatches == true {
-						AsyncButton {
-							await updateMatchList(update: ValorantClient.loadOlderMatches)
 						} label: {
-							Label(
-								String(localized: "Load Older Matches", comment: "Match List"),
-								systemImage: "ellipsis"
-							)
-							.font(.subheadline.weight(.medium))
-							.frame(maxWidth: .infinity)
-							.padding(.vertical, 12)
+							VStack(alignment: .leading, spacing: 6) {
+								HStack(spacing: 6) {
+									Image(systemName: "clock.badge.checkmark")
+										.foregroundStyle(Color.accentColor)
+									Text("Session Recap")
+										.font(.subheadline.weight(.semibold))
+								}
+								if let latest = computedLatestSession {
+									Text(latest.startTime.formatted(.dateTime.day().month(.abbreviated)))
+										.font(.caption)
+										.foregroundStyle(.secondary)
+									HStack(spacing: 4) {
+										Text("\(latest.matchCount) matches")
+											.foregroundStyle(.secondary)
+										if latest.netRRDelta != 0 {
+											Text("• \(latest.netRRDelta > 0 ? "+\(latest.netRRDelta)" : "\(latest.netRRDelta)") RR")
+												.foregroundStyle(latest.netRRDelta > 0 ? Color.green : Color.red)
+										}
+									}
+									.font(.caption.monospacedDigit())
+								} else {
+									Text("Open matches to build")
+										.font(.caption)
+										.foregroundStyle(.secondary)
+								}
+							}
+							.frame(maxWidth: .infinity, minHeight: 74, alignment: .topLeading)
+							.padding(12)
 							.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 						}
 						.buttonStyle(.plain)
+						
+						NavigationLink {
+							if let user, let matchList {
+								StatisticsContainer(user: user, matchList: matchList)
+							}
+						} label: {
+							VStack(alignment: .leading, spacing: 6) {
+								HStack(spacing: 6) {
+									Image(systemName: "chart.line.uptrend.xyaxis")
+										.foregroundStyle(Color.accentColor)
+									Text("View Stats")
+										.font(.subheadline.weight(.semibold))
+								}
+								Text("Win rate, K/D & more")
+									.font(.caption)
+									.foregroundStyle(.secondary)
+								Spacer(minLength: 0)
+							}
+							.frame(maxWidth: .infinity, minHeight: 74, alignment: .topLeading)
+							.padding(12)
+							.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+						}
+						.buttonStyle(.plain)
+						.disabled(user == nil || matchList == nil)
 					}
+				}
+				.padding(.bottom, 6)
+				
+				Text("Matches", comment: "Match List: section")
+					.font(.subheadline.weight(.semibold))
+					.foregroundStyle(.secondary)
+					.frame(maxWidth: .infinity, alignment: .leading)
+					.padding(.leading, 4)
+					.padding(.top, 4)
+				
+				ForEach(shownMatches) { match in
+					MatchCell(
+						match: match,
+						userID: userID,
+						filter: filterStore.filter,
+						inList: false,
+						isCompact: settings.isCompactListStyle
+					)
+				}
+				
+				if matchList?.canLoadOlderMatches == true {
+					AsyncButton {
+						await updateMatchList(update: ValorantClient.loadOlderMatches)
+					} label: {
+						Label(
+							String(localized: "Load Older Matches", comment: "Match List"),
+							systemImage: "ellipsis"
+						)
+						.font(.subheadline.weight(.medium))
+						.frame(maxWidth: .infinity)
+						.padding(.vertical, 12)
+						.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+					}
+					.buttonStyle(.plain)
 				}
 			}
 			.padding(.horizontal, 16)
@@ -221,13 +229,13 @@ struct MatchListView: View {
 						String(localized: "Edit Filter", comment: "Match List: accessibility label"),
 						systemImage: "line.horizontal.3.decrease.circle"
 					)
-					.symbolVariant(filter.isActive ? .fill : .none)
+					.symbolVariant(filterStore.filter.isActive ? .fill : .none)
 				}
 			}
 		}
 		.refreshable { await refresh() }
 		.sheet(isPresented: $isEditingFilter) {
-			MatchListFilterEditor(filter: $filter)
+			MatchListFilterEditor(filter: $filterStore.filter)
 		}
 		.withLocalData($user, id: userID, shouldAutoUpdate: true)
 		.withLocalData($matchList, id: userID, shouldAutoUpdate: true)
@@ -235,6 +243,71 @@ struct MatchListView: View {
 		.withLocalData($identity, id: userID, shouldAutoUpdate: true)
 		.valorantLoadTask(id: userID) { client in
 			agentMastery = try? await client.getAgentMastery(userID: userID)
+			masteryFetchTick += 1
+		}
+		.onReceive(
+			LocalDataProvider.shared.matchDetailsManager.changePublisher
+				.debounce(for: .milliseconds(250), scheduler: RunLoop.main)
+		) { _ in
+			matchCacheTick += 1
+		}
+		.task(id: computeKey) {
+			let manager = LocalDataProvider.shared.matchDetailsManager
+			let details = shownMatches.prefix(40).compactMap {
+				manager.loadedObject(for: $0.id)
+			}
+			let uid = userID
+			let allUpdates = shownMatches
+			let masterySnapshot = agentMastery
+			let assetsSnapshot = assets
+			let seasonsSnapshot = seasons
+			let currentActSnapshot = currentAct
+			let prevActSnapshot = prevAct
+			let goalSnapshot = activeGoal
+			let summarySnapshot = summary
+			let matchListSnapshot = matchList
+			
+			let computed = await Task.detached(priority: .userInitiated) {
+				PerfMonitor.measure("CareerModules.compute", warnOverMs: 2.0) {
+					let detailsMap = Dictionary(uniqueKeysWithValues: details.map { ($0.id, $0) })
+					let mastery = AgentMasteryCalculator.buildFromRiot(
+						masterySnapshot,
+						userID: uid,
+						matches: details,
+						assets: assetsSnapshot,
+						contractsDetails: nil,
+						currentAct: currentActSnapshot,
+						previousAct: prevActSnapshot
+					)
+					let accolades = AccoladesCalculator.compute(
+						userID: uid,
+						matches: details,
+						act: currentActSnapshot,
+						seasons: seasonsSnapshot
+					)
+					let latestSession = SessionRecapBuilder.latestSessionPreview(
+						matches: allUpdates,
+						detailsByID: detailsMap
+					)
+					let trajectory = goalSnapshot.map { goal in
+						SeasonGoalStore.compute(
+							goal: goal,
+							summary: summarySnapshot,
+							matchList: matchListSnapshot,
+							currentAct: currentActSnapshot,
+							seasons: seasonsSnapshot
+						)
+					}
+					return (mastery, accolades, latestSession, trajectory)
+				}
+			}.value
+			
+			guard !Task.isCancelled else { return }
+			cachedDetailsSnapshot = details
+			computedMastery = computed.0
+			computedAccolades = computed.1
+			computedLatestSession = computed.2
+			computedGoalTrajectory = computed.3
 		}
 		.onAppear {
 			cacheLoadedIdentityToSocial()
@@ -242,7 +315,7 @@ struct MatchListView: View {
 		.onChange(of: identity?.cardID) { _ in
 			cacheLoadedIdentityToSocial()
 		}
-		.onChange(of: cachedMatchDetails.count) { _ in
+		.onChange(of: cachedDetailsSnapshot.count) { _ in
 			cacheLoadedIdentityToSocial()
 		}
 		.onChange(of: summary?.competitiveInfo?.bySeason?.count ?? 0) { _ in
@@ -253,7 +326,7 @@ struct MatchListView: View {
 	}
 	
 	private func cacheLoadedIdentityToSocial() {
-		let fallbackMatch = cachedMatchDetails.lazy.compactMap { match -> (Player.Identity, Date)? in
+		let fallbackMatch = cachedDetailsSnapshot.lazy.compactMap { match -> (Player.Identity, Date)? in
 			guard let pIdentity = match.players.first(where: { $0.id == userID })?.identity else { return nil }
 			return (pIdentity, match.matchInfo.gameStart)
 		}.first
@@ -262,7 +335,7 @@ struct MatchListView: View {
 		let currentActID = seasons?.currentAct()?.id
 		let tier = summary?.competitiveInfo?.inSeason(currentActID)?.competitiveTier
 			?? summary?.competitiveInfo?.bySeason?.values.first(where: { $0.competitiveTier >= 3 })?.competitiveTier
-		socialManager.cacheIdentity(resolvedIdentity, competitiveTier: tier, asOf: updateTime)
+		LocalDataProvider.onIdentityAndTierResolved?(resolvedIdentity, tier, updateTime)
 	}
 	
 	var title: Text {
@@ -283,6 +356,7 @@ struct MatchListView: View {
 		}
 		async let masteryUpdate: Void = load {
 			agentMastery = try? await $0.getAgentMastery(userID: userID)
+			masteryFetchTick += 1
 		}
 		_ = await (matchListUpdate, summaryUpdate, identityUpdate, masteryUpdate)
 	}
@@ -550,7 +624,6 @@ struct MatchListView_Previews: PreviewProvider {
 		.environmentObject(SeasonGoalStore())
 		.environmentObject(AccountManager.mocked)
 		.environmentObject(AppSettings())
-		.environmentObject(SocialManager())
 	}
 }
 #endif

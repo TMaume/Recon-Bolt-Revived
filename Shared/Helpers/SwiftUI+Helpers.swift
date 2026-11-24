@@ -131,11 +131,14 @@ private struct OnSceneActivationModifier: ViewModifier {
 	var task: () async -> Void
 	
 	@Environment(\.scenePhase) private var scenePhase
+	@State private var lastPhase: ScenePhase?
 	
 	func body(content: Content) -> some View {
 		content
 			.task(id: scenePhase) {
-				guard scenePhase == .active else { return }
+				let previous = lastPhase
+				lastPhase = scenePhase
+				guard scenePhase == .active, let previous, previous != .active else { return }
 				await task()
 			}
 	}

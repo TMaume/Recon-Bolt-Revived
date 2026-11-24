@@ -225,37 +225,39 @@ final class ImageManager: ObservableObject {
 		}
 		
 		nonisolated static func loadStateOffMain(for image: AssetImage) -> CacheState {
-			let fileURL = image.localURL as CFURL
-			if
-				let source = CGImageSourceCreateWithURL(fileURL, nil),
-				let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-				let width = properties[kCGImagePropertyPixelWidth] as? Int,
-				let height = properties[kCGImagePropertyPixelHeight] as? Int
-			{
-				let pixels = width * height
-				if pixels <= Self.cacheSizeLimit {
-					guard let loaded = image.load() else { return .missing }
-					return .cached(loaded.preparingForDisplay() ?? loaded)
-				} else if pixels <= Self.maxDownsampledSourcePixels {
-					let options: [CFString: Any] = [
-						kCGImageSourceCreateThumbnailFromImageAlways: true,
-						kCGImageSourceThumbnailMaxPixelSize: Self.downsampleMaxPixelEdge,
-						kCGImageSourceCreateThumbnailWithTransform: true,
-						kCGImageSourceShouldCacheImmediately: true,
-					]
-					if let cgThumb = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
-						return .cached(UIImage(cgImage: cgThumb))
+			PerfMonitor.measure("ImageDecode \(image.url.lastPathComponent)", warnOverMs: 2.0) {
+				let fileURL = image.localURL as CFURL
+				if
+					let source = CGImageSourceCreateWithURL(fileURL, nil),
+					let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+					let width = properties[kCGImagePropertyPixelWidth] as? Int,
+					let height = properties[kCGImagePropertyPixelHeight] as? Int
+				{
+					let pixels = width * height
+					if pixels <= Self.cacheSizeLimit {
+						guard let loaded = image.load() else { return .missing }
+						return .cached(loaded.preparingForDisplay() ?? loaded)
+					} else if pixels <= Self.maxDownsampledSourcePixels {
+						let options: [CFString: Any] = [
+							kCGImageSourceCreateThumbnailFromImageAlways: true,
+							kCGImageSourceThumbnailMaxPixelSize: Self.downsampleMaxPixelEdge,
+							kCGImageSourceCreateThumbnailWithTransform: true,
+							kCGImageSourceShouldCacheImmediately: true,
+						]
+						if let cgThumb = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
+							return .cached(UIImage(cgImage: cgThumb))
+						}
+						return .tooLarge
+					} else {
+						return .tooLarge
 					}
-					return .tooLarge
-				} else {
+				}
+				guard let loaded = image.load() else { return .missing }
+				guard let raw = loaded.cgImage, raw.width * raw.height <= Self.cacheSizeLimit else {
 					return .tooLarge
 				}
+				return .cached(loaded.preparingForDisplay() ?? loaded)
 			}
-			guard let loaded = image.load() else { return .missing }
-			guard let raw = loaded.cgImage, raw.width * raw.height <= Self.cacheSizeLimit else {
-				return .tooLarge
-			}
-			return .cached(loaded.preparingForDisplay() ?? loaded)
 		}
 		
 		nonisolated static func renderOutlined(_ image: UIImage, radius: CGFloat) -> UIImage {

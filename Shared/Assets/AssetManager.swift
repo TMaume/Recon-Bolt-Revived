@@ -22,17 +22,19 @@ final class AssetManager: ObservableObject {
 		FileManager.default.fileExists(atPath: Self.backupFileURL.path)
 	}
 	
-	@Published private var storage = Storage()
+	@Published private var storage: Storage
 	
 	nonisolated static var backupFileURL: URL {
 		FolderLocations.localData.appendingPathComponent("AssetBackup.bin", isDirectory: false)
 	}
 	
 	init() {
-		let storage = Storage()
+		let storage = PerfMonitor.measure("AssetManager.init", warnOverMs: 0) {
+			Storage()
+		}
 		self.storage = storage
 		self.assets = storage.assets
-		if storage.assets != nil, storage.installedAt == nil {
+		if self.assets != nil, storage.installedAt == nil {
 			self.storage.installedAt = Date()
 		}
 		
@@ -40,6 +42,7 @@ final class AssetManager: ObservableObject {
 	}
 	
 	private init(assets: AssetCollection?) {
+		self.storage = Storage()
 		self.assets = assets
 		
 		Task { await tryLoadAssets() }
@@ -106,13 +109,15 @@ final class AssetManager: ObservableObject {
 		storage.assets = nil
 	}
 	
-	func storageSizes() -> (installedBytes: Int64, backupBytes: Int64, widgetBytes: Int64) {
-		let storedData = (UserDefaults.shared.array(forKey: "AssetManager.stored") as? [Data])?.first
-			?? UserDefaults.shared.data(forKey: "AssetManager.stored")
-		let installedBytes = Int64(storedData?.count ?? 0)
-		let backupBytes = Int64(FileManager.default.sizeOfItem(atPath: Self.backupFileURL.path) ?? 0)
-		let widgetBytes = Self.computeWidgetBytes()
-		return (installedBytes, backupBytes, widgetBytes)
+	nonisolated static func computeStorageSizes() async -> (installedBytes: Int64, backupBytes: Int64, widgetBytes: Int64) {
+		await Task.detached(priority: .userInitiated) {
+			let storedData = (UserDefaults.shared.array(forKey: "AssetManager.stored") as? [Data])?.first
+				?? UserDefaults.shared.data(forKey: "AssetManager.stored")
+			let installedBytes = Int64(storedData?.count ?? 0)
+			let backupBytes = Int64(FileManager.default.sizeOfItem(atPath: Self.backupFileURL.path) ?? 0)
+			let widgetBytes = Self.computeWidgetBytes()
+			return (installedBytes, backupBytes, widgetBytes)
+		}.value
 	}
 	
 	private nonisolated static func computeWidgetBytes() -> Int64 {

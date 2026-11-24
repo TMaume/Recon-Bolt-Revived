@@ -111,6 +111,11 @@ final class SocialManager: ObservableObject {
 				self?.cacheIdentities(identities, asOf: updateTime)
 			}
 		}
+		LocalDataProvider.onIdentityAndTierResolved = { [weak self] identity, tier, updateTime in
+			Task { @MainActor [weak self] in
+				self?.cacheIdentity(identity, competitiveTier: tier, asOf: updateTime)
+			}
+		}
 	}
 	
 	var friends: [XMPPFriend] {
@@ -169,6 +174,7 @@ final class SocialManager: ObservableObject {
 	func reconnect(using apiClient: ValorantClient, clearExisting: Bool = false) async {
 		connectAttempt += 1
 		let attempt = connectAttempt
+		PerfMonitor.log("XMPP", "reconnect start attempt=\(attempt) user=\(apiClient.userID)")
 		await client.disconnect() // cancels any stuck in-flight attempt
 		loadCacheIfNeeded(for: apiClient.userID)
 		connectedUserID = apiClient.userID
@@ -180,7 +186,9 @@ final class SocialManager: ObservableObject {
 			try await client.connect(client: apiClient) { [weak self] event in
 				await self?.handle(event)
 			}
+			PerfMonitor.log("XMPP", "reconnect finished attempt=\(attempt)")
 		} catch {
+			PerfMonitor.log("XMPP", "reconnect failed attempt=\(attempt) cancelled=\(error is CancellationError) error=\(error.localizedDescription)")
 			guard attempt == connectAttempt else { return } // superseded by a newer attempt
 			await client.disconnect()
 			connectionState = .failed(error.localizedDescription)
@@ -404,6 +412,7 @@ final class SocialManager: ObservableObject {
 	private func handle(_ event: XMPPEvent) {
 		switch event {
 		case .connected(let jid):
+			PerfMonitor.log("XMPP", "connected jid=\(jid)")
 			self.myJID = jid
 			self.resourcesByJID = [:]
 			self.ownResources = [:]
@@ -418,6 +427,7 @@ final class SocialManager: ObservableObject {
 			}
 			
 		case .disconnected(let error):
+			PerfMonitor.log("XMPP", "disconnected error=\(error?.localizedDescription ?? "none")")
 			self.isRefreshing = false
 			self.loadingHistoryJIDs.removeAll()
 			if let error {

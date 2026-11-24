@@ -18,7 +18,6 @@ struct StorageBreakdown: Sendable {
 	
 	@MainActor
 	static func compute(assetManager: AssetManager) async -> StorageBreakdown {
-		let assetSizes = assetManager.storageSizes()
 		let matchListURL = LocalDataProvider.shared.matchListManager.folderURL
 		let matchDetailsURL = LocalDataProvider.shared.matchDetailsManager.folderURL
 		let summaryURL = LocalDataProvider.shared.careerSummaryManager.folderURL
@@ -37,6 +36,7 @@ struct StorageBreakdown: Sendable {
 		]
 		
 		return await Task.detached(priority: .userInitiated) {
+			let assetSizes = await AssetManager.computeStorageSizes()
 			let assets = assetSizes.installedBytes + assetSizes.backupBytes + assetSizes.widgetBytes
 			let matches = Self.directorySize(of: matchListURL) + Self.directorySize(of: matchDetailsURL)
 			let profiles = Self.directorySize(of: summaryURL)
