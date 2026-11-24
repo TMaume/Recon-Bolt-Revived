@@ -34,11 +34,20 @@ struct MatchListView: View {
 	@Environment(\.seasons) private var seasons
 	@EnvironmentObject private var bookmarkList: BookmarkList
 	@EnvironmentObject private var goalStore: SeasonGoalStore
+	@EnvironmentObject private var progressTimelineStore: ProgressTimelineStore
 	@EnvironmentObject private var accountManager: AccountManager
 	@EnvironmentObject private var settings: AppSettings
 	
 	private var shownMatches: [CompetitiveUpdate] {
 		matchList?.matches ?? []
+	}
+	
+	private var currentSeasonProgressKey: String {
+		guard let currentAct = seasons?.currentAct(),
+			  let info = summary?.competitiveInfo?.inSeason(currentAct.id) else {
+			return ""
+		}
+		return "\(info.competitiveTier)-\(info.adjustedRankedRating)-\(info.leaderboardRank)"
 	}
 	
 	private struct CareerComputeKey: Equatable {
@@ -332,18 +341,36 @@ struct MatchListView: View {
 		}
 		.onAppear {
 			cacheLoadedIdentityToSocial()
+			recordProgressIfOwnAccount()
 		}
 		.onChange(of: identity?.cardID) { _ in
 			cacheLoadedIdentityToSocial()
+		}
+		.onChange(of: identity?.accountLevel) { _ in
+			recordProgressIfOwnAccount()
 		}
 		.onChange(of: cachedDetailsSnapshot.count) { _ in
 			cacheLoadedIdentityToSocial()
 		}
 		.onChange(of: summary?.competitiveInfo?.bySeason?.count ?? 0) { _ in
 			cacheLoadedIdentityToSocial()
+			recordProgressIfOwnAccount()
+		}
+		.onChange(of: currentSeasonProgressKey) { _ in
+			recordProgressIfOwnAccount()
 		}
 		.anonymizing(additionally: shouldAnonymize(userID) ? .all : .none)
 		.navigationTitle(title)
+	}
+	
+	private func recordProgressIfOwnAccount() {
+		guard accountManager.storedAccounts.contains(userID) else { return }
+		if let summary {
+			progressTimelineStore.record(summary: summary, seasons: seasons, for: userID)
+		}
+		if let identity {
+			progressTimelineStore.record(identity: identity, for: userID)
+		}
 	}
 	
 	private func cacheLoadedIdentityToSocial() {
@@ -643,6 +670,7 @@ struct MatchListView_Previews: PreviewProvider {
 		.withToolbar()
 		.environmentObject(BookmarkList())
 		.environmentObject(SeasonGoalStore())
+		.environmentObject(ProgressTimelineStore())
 		.environmentObject(AccountManager.mocked)
 		.environmentObject(AppSettings())
 	}

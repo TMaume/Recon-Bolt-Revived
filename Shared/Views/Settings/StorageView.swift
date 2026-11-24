@@ -13,6 +13,7 @@ struct StorageView: View {
 	@EnvironmentObject private var usernameHistoryStore: UsernameHistoryStore
 	@EnvironmentObject private var playerSettingsSnapshotStore: PlayerSettingsSnapshotStore
 	@EnvironmentObject private var seasonGoalStore: SeasonGoalStore
+	@EnvironmentObject private var progressTimelineStore: ProgressTimelineStore
 	@EnvironmentObject private var socialManager: SocialManager
 	@EnvironmentObject private var lineupsManager: LineupsManager
 	@StateObject private var storageManager = StorageManager()
@@ -331,6 +332,7 @@ struct StorageView: View {
 			usernameHistoryStore: usernameHistoryStore,
 			playerSettingsSnapshotStore: playerSettingsSnapshotStore,
 			seasonGoalStore: seasonGoalStore,
+			progressTimelineStore: progressTimelineStore,
 			socialManager: socialManager,
 			lineupsManager: lineupsManager
 		)

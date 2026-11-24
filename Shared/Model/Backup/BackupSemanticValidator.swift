@@ -249,6 +249,27 @@ enum BackupSemanticValidator {
 		}
 	}
 	
+	static func validateProgressTimeline(_ points: [ProgressTimelinePoint]) throws {
+		let now = Date()
+		guard points.count <= 25_000 else {
+			throw BackupError.semanticValidationFailed("Too many progress timeline entries.")
+		}
+		for point in points {
+			guard point.dayKey.count == 10,
+				  isValidDate(point.recordedAt, now: now),
+				  point.accountLevel.map({ (0...10_000).contains($0) }) ?? true,
+				  point.accountXP.map({ (0...50_000).contains($0) }) ?? true,
+				  point.leaderboardRank.map({ (1...500_000).contains($0) }) ?? true,
+				  point.competitiveTier.map({ (0...50).contains($0) }) ?? true,
+				  point.rankedRating.map({ (-500...20_000).contains($0) }) ?? true,
+				  point.vp.map({ (0...50_000_000).contains($0) }) ?? true,
+				  point.rp.map({ (0...50_000_000).contains($0) }) ?? true,
+				  point.kc.map({ (0...50_000_000).contains($0) }) ?? true else {
+				throw BackupError.semanticValidationFailed("Progress timeline entry values out of valid range.")
+			}
+		}
+	}
+	
 	static func validateLoadoutPresets(_ presets: [LoadoutPreset]) throws {
 		let now = Date()
 		guard presets.count <= 5_000 else {

@@ -13,6 +13,7 @@ private final class AppServices {
 	let shopHistoryStore = ShopHistoryStore()
 	let playerSettingsSnapshotStore = PlayerSettingsSnapshotStore()
 	let seasonGoalStore = SeasonGoalStore()
+	let progressTimelineStore = ProgressTimelineStore()
 	let socialManager = SocialManager()
 	let lineupsManager = LineupsManager()
 }
@@ -52,6 +53,7 @@ struct ReconBoltApp: App {
 					.environmentObject(UsernameHistoryStore.shared)
 					.environmentObject(services.playerSettingsSnapshotStore)
 					.environmentObject(services.seasonGoalStore)
+					.environmentObject(services.progressTimelineStore)
 					.environmentObject(services.socialManager)
 					.environmentObject(services.socialManager.onlineCountModel)
 					.environmentObject(services.lineupsManager)

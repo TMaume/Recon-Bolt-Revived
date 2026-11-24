@@ -28,6 +28,7 @@ struct LiveView: View {
 	@Environment(\.assets) private var assets
 	@Environment(\.seasons) private var seasons
 	@EnvironmentObject private var favoritesManager: FavoritesManager
+	@EnvironmentObject private var progressTimelineStore: ProgressTimelineStore
 	
 	@Namespace private var missionsBoxID
 	@Namespace private var storeBoxID
@@ -74,6 +75,9 @@ struct LiveView: View {
 			let (progress, xp, recruitment, mastery) = try await (progressTask, xpTask, recruitmentTask, masteryTask)
 			contractsProgress = progress
 			accountXP = xp
+			if let xp {
+				progressTimelineStore.record(accountXP: xp, for: userID)
+			}
 			activeRecruitment = recruitment
 			agentMastery = mastery
 		}
@@ -104,7 +108,9 @@ struct LiveView: View {
 				)
 			}
 		} refresh: {
-			storeInfo = try await .init(using: $0)
+			let fetched = try await StoreInfo(using: $0)
+			storeInfo = fetched
+			progressTimelineStore.record(wallet: fetched.wallet, for: userID)
 		}
 		.id(storeBoxID)
 	}
@@ -241,6 +247,7 @@ struct LiveView_Previews: PreviewProvider {
 			contractsProgress: PreviewData.contractsProgress
 		)
 		.environmentObject(FavoritesManager())
+		.environmentObject(ProgressTimelineStore())
 		.withToolbar()
 	}
 }

@@ -13,6 +13,7 @@ struct BackupStores {
 	let usernameHistoryStore: UsernameHistoryStore
 	let playerSettingsSnapshotStore: PlayerSettingsSnapshotStore
 	let seasonGoalStore: SeasonGoalStore
+	let progressTimelineStore: ProgressTimelineStore
 	let socialManager: SocialManager
 	let lineupsManager: LineupsManager
 }
@@ -60,6 +61,7 @@ struct BackupInventory {
 	var lookupUserIDs: Set<User.ID> = []
 	var shopDayCountsByPlayer: [User.ID: Int] = [:]
 	var goalAccountIDs: [User.ID?] = []
+	var progressPointCountsByPlayer: [User.ID: Int] = [:]
 	var presetAccountIDs: [User.ID?] = []
 	var snapshotAccountIDs: [User.ID?] = []
 	var socialFriendPlayers: Set<User.ID> = []
@@ -107,6 +109,11 @@ struct BackupInventory {
 				guard let id else { return !selectedPlayers.isEmpty }
 				return selectedPlayers.contains(id)
 			}
+		case .progressTimeline:
+			return progressPointCountsByPlayer
+				.filter { selectedPlayers.contains($0.key) }
+				.values
+				.reduce(0, +)
 		case .loadoutPresets:
 			return presetAccountIDs.count { id in
 				guard let id else { return !selectedPlayers.isEmpty }
@@ -257,6 +264,7 @@ enum BackupService {
 		let lookupIDs = Set(lookupEntries.map(\.user))
 		let shopDays = stores.shopHistoryStore.exportDays(for: nil)
 		let goals = stores.seasonGoalStore.exportGoals(for: nil)
+		let progressPoints = stores.progressTimelineStore.exportPoints(for: nil)
 		let presets = stores.loadoutPresetManager.exportPresets(for: nil)
 		let snapshots = stores.playerSettingsSnapshotStore.exportSnapshots(for: nil)
 		
@@ -268,6 +276,11 @@ enum BackupService {
 		var shopDayCounts: [User.ID: Int] = [:]
 		for day in shopDays {
 			shopDayCounts[day.accountID, default: 0] += 1
+		}
+		
+		var progressPointCounts: [User.ID: Int] = [:]
+		for point in progressPoints {
+			progressPointCounts[point.accountID, default: 0] += 1
 		}
 		
 		var socialFriendPlayers: Set<User.ID> = []
@@ -298,6 +311,7 @@ enum BackupService {
 		discoveredIDs.formUnion(usernameHistory.keys)
 		discoveredIDs.formUnion(shopDayCounts.keys)
 		discoveredIDs.formUnion(goals.compactMap(\.accountID))
+		discoveredIDs.formUnion(progressPointCounts.keys)
 		discoveredIDs.formUnion(presets.compactMap(\.accountID))
 		discoveredIDs.formUnion(snapshots.compactMap(\.accountID))
 		discoveredIDs.formUnion(socialFriendPlayers)
@@ -363,6 +377,7 @@ enum BackupService {
 			lookupUserIDs: lookupIDs,
 			shopDayCountsByPlayer: shopDayCounts,
 			goalAccountIDs: goals.map(\.accountID),
+			progressPointCountsByPlayer: progressPointCounts,
 			presetAccountIDs: presets.map(\.accountID),
 			snapshotAccountIDs: snapshots.map(\.accountID),
 			socialFriendPlayers: socialFriendPlayers,
@@ -465,6 +480,10 @@ enum BackupService {
 			? stores.seasonGoalStore.exportGoals(for: playerFilter)
 			: []
 		
+		let progressTimeline = options.selectedModules.contains(.progressTimeline)
+			? stores.progressTimelineStore.exportPoints(for: playerFilter)
+			: []
+		
 		let loadoutPresets = options.selectedModules.contains(.loadoutPresets)
 			? stores.loadoutPresetManager.exportPresets(for: playerFilter)
 			: []
@@ -548,6 +567,9 @@ enum BackupService {
 			}
 			if selectedModules.contains(.seasonGoals) {
 				try appendModule(.seasonGoals, value: seasonGoals, itemCount: seasonGoals.count)
+			}
+			if selectedModules.contains(.progressTimeline) {
+				try appendModule(.progressTimeline, value: progressTimeline, itemCount: progressTimeline.count)
 			}
 			if selectedModules.contains(.loadoutPresets) {
 				try appendModule(.loadoutPresets, value: loadoutPresets, itemCount: loadoutPresets.count)
@@ -653,6 +675,7 @@ enum BackupService {
 		var lookupHistory: [LookupHistory.Entry]?
 		var shopHistory: [ShopHistoryDay]?
 		var seasonGoals: [SeasonGoal]?
+		var progressTimeline: [ProgressTimelinePoint]?
 		var loadoutPresets: [LoadoutPreset]?
 		var settingsSnapshots: [PlayerSettingsSnapshot]?
 		var socialFriends: [String: SocialFriendsBackup]?
@@ -742,6 +765,11 @@ enum BackupService {
 					let goals = try decoder.decode([SeasonGoal].self, from: rawJSON)
 					try BackupSemanticValidator.validateSeasonGoals(goals)
 					payload.seasonGoals = goals
+					
+				case .progressTimeline:
+					let points = try decoder.decode([ProgressTimelinePoint].self, from: rawJSON)
+					try BackupSemanticValidator.validateProgressTimeline(points)
+					payload.progressTimeline = points
 					
 				case .loadoutPresets:
 					let presets = try decoder.decode([LoadoutPreset].self, from: rawJSON)
@@ -833,6 +861,9 @@ enum BackupService {
 						return selectedPlayers.contains(id)
 					}
 				}
+				if let progress = payload.progressTimeline {
+					payload.progressTimeline = progress.filter { selectedPlayers.contains($0.accountID) }
+				}
 				if let presets = payload.loadoutPresets {
 					payload.loadoutPresets = presets.filter { preset in
 						guard let id = preset.accountID else { return !selectedPlayers.isEmpty }
@@ -903,6 +934,9 @@ enum BackupService {
 		}
 		if let goals = validated.seasonGoals {
 			counts[.seasonGoals] = await stores.seasonGoalStore.importGoals(goals, replaceAll: replaceAll)
+		}
+		if let progress = validated.progressTimeline {
+			counts[.progressTimeline] = await stores.progressTimelineStore.importPoints(progress, replaceAll: replaceAll)
 		}
 		if let presets = validated.loadoutPresets {
 			counts[.loadoutPresets] = await stores.loadoutPresetManager.importPresets(presets, replaceAll: replaceAll)

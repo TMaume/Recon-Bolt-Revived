@@ -16,6 +16,7 @@ struct ContentView: View {
 	@EnvironmentObject private var usernameHistoryStore: UsernameHistoryStore
 	@EnvironmentObject private var playerSettingsSnapshotStore: PlayerSettingsSnapshotStore
 	@EnvironmentObject private var seasonGoalStore: SeasonGoalStore
+	@EnvironmentObject private var progressTimelineStore: ProgressTimelineStore
 	@EnvironmentObject private var socialManager: SocialManager
 	@EnvironmentObject private var lineupsManager: LineupsManager
 	
@@ -103,6 +104,7 @@ struct ContentView: View {
 			usernameHistoryStore: usernameHistoryStore,
 			playerSettingsSnapshotStore: playerSettingsSnapshotStore,
 			seasonGoalStore: seasonGoalStore,
+			progressTimelineStore: progressTimelineStore,
 			socialManager: socialManager,
 			lineupsManager: lineupsManager
 		)
@@ -215,6 +217,7 @@ struct ContentView_Previews: PreviewProvider {
 		.environmentObject(UsernameHistoryStore.shared)
 		.environmentObject(PlayerSettingsSnapshotStore())
 		.environmentObject(SeasonGoalStore())
+		.environmentObject(ProgressTimelineStore())
 		.environmentObject(SocialManager())
 		.environmentObject(LineupsManager())
 	}

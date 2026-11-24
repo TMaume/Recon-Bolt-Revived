@@ -37,6 +37,7 @@ enum BackupModuleKind: String, CaseIterable, Codable, Identifiable, Hashable, Se
 	case lookupHistory = "lookupHistory"
 	case shopHistory = "account.shopHistory"
 	case seasonGoals = "account.seasonGoals"
+	case progressTimeline = "account.progressTimeline"
 	case loadoutPresets = "account.loadoutPresets"
 	case settingsSnapshots = "account.settingsSnapshots"
 	case socialFriends = "social.friends"
@@ -63,7 +64,7 @@ enum BackupModuleKind: String, CaseIterable, Codable, Identifiable, Hashable, Se
 			return .matches
 		case .careerSummaries, .users, .playerIdentities, .usernameHistory:
 			return .profiles
-		case .bookmarks, .lookupHistory, .shopHistory, .seasonGoals, .loadoutPresets, .settingsSnapshots:
+		case .bookmarks, .lookupHistory, .shopHistory, .seasonGoals, .progressTimeline, .loadoutPresets, .settingsSnapshots:
 			return .accountData
 		case .socialFriends, .socialMessages:
 			return .social
@@ -84,6 +85,7 @@ enum BackupModuleKind: String, CaseIterable, Codable, Identifiable, Hashable, Se
 		case .lookupHistory: return "Recent Player Searches"
 		case .shopHistory: return "Daily Shop & Night Market History"
 		case .seasonGoals: return "Season Rank Goals"
+		case .progressTimeline: return "Progress Timelines"
 		case .loadoutPresets: return "Loadout Presets"
 		case .settingsSnapshots: return "Player Settings Snapshots"
 		case .socialFriends: return "Friends List & Activity"
@@ -106,6 +108,7 @@ enum BackupModuleKind: String, CaseIterable, Codable, Identifiable, Hashable, Se
 		case .lookupHistory: return "Recent career search history"
 		case .shopHistory: return "Recorded daily store and Night Market offers"
 		case .seasonGoals: return "Target ranks and climb baselines"
+		case .progressTimeline: return "Account level, leaderboard rank, and wallet history over time"
 		case .loadoutPresets: return "Saved weapon skin and expression loadouts"
 		case .settingsSnapshots: return "Backed-up in-game Valorant settings"
 		case .socialFriends: return "Cached friends, cards, and friend list events"
@@ -128,6 +131,7 @@ enum BackupModuleKind: String, CaseIterable, Codable, Identifiable, Hashable, Se
 		case .lookupHistory: return "magnifyingglass"
 		case .shopHistory: return "bag"
 		case .seasonGoals: return "flag"
+		case .progressTimeline: return "chart.xyaxis.line"
 		case .loadoutPresets: return "square.3.layers.3d"
 		case .settingsSnapshots: return "slider.horizontal.below.rectangle"
 		case .socialFriends: return "person.2"
