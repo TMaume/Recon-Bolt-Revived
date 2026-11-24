@@ -39,6 +39,7 @@ enum BackupModuleKind: String, CaseIterable, Codable, Identifiable, Hashable, Se
 	case seasonGoals = "account.seasonGoals"
 	case progressTimeline = "account.progressTimeline"
 	case loadoutPresets = "account.loadoutPresets"
+	case favoritesPresets = "account.favoritesPresets"
 	case settingsSnapshots = "account.settingsSnapshots"
 	case socialFriends = "social.friends"
 	case socialMessages = "social.messages"
@@ -64,7 +65,7 @@ enum BackupModuleKind: String, CaseIterable, Codable, Identifiable, Hashable, Se
 			return .matches
 		case .careerSummaries, .users, .playerIdentities, .usernameHistory:
 			return .profiles
-		case .bookmarks, .lookupHistory, .shopHistory, .seasonGoals, .progressTimeline, .loadoutPresets, .settingsSnapshots:
+		case .bookmarks, .lookupHistory, .shopHistory, .seasonGoals, .progressTimeline, .loadoutPresets, .favoritesPresets, .settingsSnapshots:
 			return .accountData
 		case .socialFriends, .socialMessages:
 			return .social
@@ -87,6 +88,7 @@ enum BackupModuleKind: String, CaseIterable, Codable, Identifiable, Hashable, Se
 		case .seasonGoals: return "Season Rank Goals"
 		case .progressTimeline: return "Progress Timelines"
 		case .loadoutPresets: return "Loadout Presets"
+		case .favoritesPresets: return "Favorites Presets"
 		case .settingsSnapshots: return "Player Settings Snapshots"
 		case .socialFriends: return "Friends List & Activity"
 		case .socialMessages: return "Chat Messages"
@@ -110,6 +112,7 @@ enum BackupModuleKind: String, CaseIterable, Codable, Identifiable, Hashable, Se
 		case .seasonGoals: return "Target ranks and climb baselines"
 		case .progressTimeline: return "Account level, leaderboard rank, and wallet history over time"
 		case .loadoutPresets: return "Saved weapon skin and expression loadouts"
+		case .favoritesPresets: return "Saved in-game VALORANT favorites collections"
 		case .settingsSnapshots: return "Backed-up in-game Valorant settings"
 		case .socialFriends: return "Cached friends, cards, and friend list events"
 		case .socialMessages: return "Private XMPP chat history (unchecked by default)"
@@ -133,6 +136,7 @@ enum BackupModuleKind: String, CaseIterable, Codable, Identifiable, Hashable, Se
 		case .seasonGoals: return "flag"
 		case .progressTimeline: return "chart.xyaxis.line"
 		case .loadoutPresets: return "square.3.layers.3d"
+		case .favoritesPresets: return "star.square.on.square"
 		case .settingsSnapshots: return "slider.horizontal.below.rectangle"
 		case .socialFriends: return "person.2"
 		case .socialMessages: return "bubble.left.and.bubble.right"

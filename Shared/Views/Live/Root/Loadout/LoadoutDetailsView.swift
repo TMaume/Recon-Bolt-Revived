@@ -17,6 +17,13 @@ struct LoadoutDetailsView: View {
 	@State private var privacyExpanded = false
 	@State private var showingRandomizeDialog = false
 	@State private var activeShareCard: LoadoutShareCardKind?
+	@State private var activePresetSheet: PresetSheetKind?
+	
+	private enum PresetSheetKind: Identifiable {
+		case loadout
+		case favorites
+		var id: Self { self }
+	}
 	@State private var isRandomizing = false
 	@State private var actRankHiddenOverride: Bool?
 	@State private var actRankToggleGeneration: UInt64 = 0
@@ -71,8 +78,8 @@ struct LoadoutDetailsView: View {
 			
 			// Block 2: Presets & Randomize
 			LoadoutBlockCard {
-				NavigationLink {
-					LoadoutPresetsView(loadout: loadoutBinding, inventory: inventory, favoritesOnly: false)
+				Button {
+					activePresetSheet = .loadout
 				} label: {
 					LoadoutActionRow(icon: "square.stack.3d.up.fill", title: "Loadout Presets")
 				}
@@ -81,8 +88,8 @@ struct LoadoutDetailsView: View {
 				Divider()
 					.padding(.leading, 50)
 				
-				NavigationLink {
-					LoadoutPresetsView(loadout: loadoutBinding, inventory: inventory, favoritesOnly: true)
+				Button {
+					activePresetSheet = .favorites
 				} label: {
 					LoadoutActionRow(icon: "star.square.on.square.fill", title: "Favorites Presets")
 				}
@@ -168,6 +175,20 @@ struct LoadoutDetailsView: View {
 			Button("Cancel", role: .cancel) {}
 		} message: {
 			Text("Replaces your equipped card, title, weapon skins, and expressions.")
+		}
+		.sheet(item: $activePresetSheet) { kind in
+			NavigationStack {
+				switch kind {
+				case .loadout:
+					LoadoutPresetsView(loadout: loadoutBinding, inventory: inventory)
+				case .favorites:
+					FavoritesPresetsView(
+						accountID: loadout.subject,
+						equippedCardID: loadout.identity.card,
+						inventory: inventory
+					)
+				}
+			}
 		}
 		.sheet(item: $activeShareCard) { kind in
 			switch kind {

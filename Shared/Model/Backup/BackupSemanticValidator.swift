@@ -279,8 +279,26 @@ enum BackupSemanticValidator {
 			guard preset.name.count <= 128,
 				  isValidDate(preset.createdAt, now: now),
 				  isValidDate(preset.updatedAt, now: now),
-				  preset.loadout.guns.count <= 64 else {
+				  preset.loadout.guns.count <= 64,
+				  (preset.includedWeapons?.count ?? 0) <= 64,
+				  preset.bannerImageData.map({ $0.count <= 512_000 }) ?? true else {
 				throw BackupError.semanticValidationFailed("Loadout preset invalid.")
+			}
+		}
+	}
+	
+	static func validateFavoritesPresets(_ presets: [FavoritesPreset]) throws {
+		let now = Date()
+		guard presets.count <= 5_000 else {
+			throw BackupError.semanticValidationFailed("Too many favorites presets.")
+		}
+		for preset in presets {
+			guard preset.name.count <= 128,
+				  isValidDate(preset.createdAt, now: now),
+				  isValidDate(preset.updatedAt, now: now),
+				  preset.itemIDs.count <= 10_000,
+				  preset.bannerImageData.map({ $0.count <= 512_000 }) ?? true else {
+				throw BackupError.semanticValidationFailed("Favorites preset invalid.")
 			}
 		}
 	}

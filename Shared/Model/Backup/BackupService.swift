@@ -63,6 +63,7 @@ struct BackupInventory {
 	var goalAccountIDs: [User.ID?] = []
 	var progressPointCountsByPlayer: [User.ID: Int] = [:]
 	var presetAccountIDs: [User.ID?] = []
+	var favoritesPresetAccountIDs: [User.ID?] = []
 	var snapshotAccountIDs: [User.ID?] = []
 	var socialFriendPlayers: Set<User.ID> = []
 	var socialMessageCountsByPlayer: [User.ID: Int] = [:]
@@ -116,6 +117,11 @@ struct BackupInventory {
 				.reduce(0, +)
 		case .loadoutPresets:
 			return presetAccountIDs.count { id in
+				guard let id else { return !selectedPlayers.isEmpty }
+				return selectedPlayers.contains(id)
+			}
+		case .favoritesPresets:
+			return favoritesPresetAccountIDs.count { id in
 				guard let id else { return !selectedPlayers.isEmpty }
 				return selectedPlayers.contains(id)
 			}
@@ -266,6 +272,7 @@ enum BackupService {
 		let goals = stores.seasonGoalStore.exportGoals(for: nil)
 		let progressPoints = stores.progressTimelineStore.exportPoints(for: nil)
 		let presets = stores.loadoutPresetManager.exportPresets(for: nil)
+		let favoritesPresets = stores.loadoutPresetManager.exportFavoritesPresets(for: nil)
 		let snapshots = stores.playerSettingsSnapshotStore.exportSnapshots(for: nil)
 		
 		var matchIDsByPlayer: [User.ID: Set<Match.ID>] = [:]
@@ -313,6 +320,7 @@ enum BackupService {
 		discoveredIDs.formUnion(goals.compactMap(\.accountID))
 		discoveredIDs.formUnion(progressPointCounts.keys)
 		discoveredIDs.formUnion(presets.compactMap(\.accountID))
+		discoveredIDs.formUnion(favoritesPresets.compactMap(\.accountID))
 		discoveredIDs.formUnion(snapshots.compactMap(\.accountID))
 		discoveredIDs.formUnion(socialFriendPlayers)
 		discoveredIDs.formUnion(socialMessageCounts.keys)
@@ -379,6 +387,7 @@ enum BackupService {
 			goalAccountIDs: goals.map(\.accountID),
 			progressPointCountsByPlayer: progressPointCounts,
 			presetAccountIDs: presets.map(\.accountID),
+			favoritesPresetAccountIDs: favoritesPresets.map(\.accountID),
 			snapshotAccountIDs: snapshots.map(\.accountID),
 			socialFriendPlayers: socialFriendPlayers,
 			socialMessageCountsByPlayer: socialMessageCounts,
@@ -488,6 +497,10 @@ enum BackupService {
 			? stores.loadoutPresetManager.exportPresets(for: playerFilter)
 			: []
 		
+		let favoritesPresets = options.selectedModules.contains(.favoritesPresets)
+			? stores.loadoutPresetManager.exportFavoritesPresets(for: playerFilter)
+			: []
+		
 		let settingsSnapshots = options.selectedModules.contains(.settingsSnapshots)
 			? stores.playerSettingsSnapshotStore.exportSnapshots(for: playerFilter)
 			: []
@@ -573,6 +586,9 @@ enum BackupService {
 			}
 			if selectedModules.contains(.loadoutPresets) {
 				try appendModule(.loadoutPresets, value: loadoutPresets, itemCount: loadoutPresets.count)
+			}
+			if selectedModules.contains(.favoritesPresets) {
+				try appendModule(.favoritesPresets, value: favoritesPresets, itemCount: favoritesPresets.count)
 			}
 			if selectedModules.contains(.settingsSnapshots) {
 				try appendModule(.settingsSnapshots, value: settingsSnapshots, itemCount: settingsSnapshots.count)
@@ -677,6 +693,7 @@ enum BackupService {
 		var seasonGoals: [SeasonGoal]?
 		var progressTimeline: [ProgressTimelinePoint]?
 		var loadoutPresets: [LoadoutPreset]?
+		var favoritesPresets: [FavoritesPreset]?
 		var settingsSnapshots: [PlayerSettingsSnapshot]?
 		var socialFriends: [String: SocialFriendsBackup]?
 		var socialMessages: [String: [String: [XMPPChatMessage]]]?
@@ -776,6 +793,11 @@ enum BackupService {
 					try BackupSemanticValidator.validateLoadoutPresets(presets)
 					payload.loadoutPresets = presets
 					
+				case .favoritesPresets:
+					let favorites = try decoder.decode([FavoritesPreset].self, from: rawJSON)
+					try BackupSemanticValidator.validateFavoritesPresets(favorites)
+					payload.favoritesPresets = favorites
+					
 				case .settingsSnapshots:
 					let snapshots = try decoder.decode([PlayerSettingsSnapshot].self, from: rawJSON)
 					try BackupSemanticValidator.validateSettingsSnapshots(snapshots)
@@ -870,6 +892,12 @@ enum BackupService {
 						return selectedPlayers.contains(id)
 					}
 				}
+				if let favPresets = payload.favoritesPresets {
+					payload.favoritesPresets = favPresets.filter { preset in
+						guard let id = preset.accountID else { return !selectedPlayers.isEmpty }
+						return selectedPlayers.contains(id)
+					}
+				}
 				if let snapshots = payload.settingsSnapshots {
 					payload.settingsSnapshots = snapshots.filter { snapshot in
 						guard let id = snapshot.accountID else { return !selectedPlayers.isEmpty }
@@ -940,6 +968,9 @@ enum BackupService {
 		}
 		if let presets = validated.loadoutPresets {
 			counts[.loadoutPresets] = await stores.loadoutPresetManager.importPresets(presets, replaceAll: replaceAll)
+		}
+		if let favPresets = validated.favoritesPresets {
+			counts[.favoritesPresets] = await stores.loadoutPresetManager.importFavoritesPresets(favPresets, replaceAll: replaceAll)
 		}
 		if let snapshots = validated.settingsSnapshots {
 			counts[.settingsSnapshots] = await stores.playerSettingsSnapshotStore.importSnapshots(snapshots, replaceAll: replaceAll)

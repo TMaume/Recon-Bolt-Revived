@@ -165,6 +165,7 @@ private enum RiotFavoritesClient {
 final class FavoritesManager: ObservableObject {
 	@Published private(set) var favoritesByAccount: [User.ID: Favorites] = [:]
 	@Published private(set) var inFlightItemIDs: Set<LowercaseUUID> = []
+	@Published private(set) var isApplyingPreset = false
 	
 	func favorites(for accountID: User.ID?) -> Favorites? {
 		guard let accountID else { return nil }
@@ -313,6 +314,63 @@ final class FavoritesManager: ObservableObject {
 				}
 			}
 			throw lastError ?? FavoriteSyncError.httpError(code, nil)
+		}
+	}
+	
+	func applyFavoritesPreset(
+		itemIDs targetList: [LowercaseUUID],
+		using client: ValorantClient,
+		progress: ((Int, Int) -> Void)? = nil
+	) async throws {
+		guard !isApplyingPreset else { return }
+		isApplyingPreset = true
+		defer { isApplyingPreset = false }
+		
+		let current = try await client.getFavorites()
+		var seen = Set<LowercaseUUID>()
+		let dedupedTarget = targetList.filter { seen.insert($0).inserted }
+		let targetSet = Set(dedupedTarget)
+		
+		let currentEntries = Array(current.favoritedContent.values)
+		let currentIDs = Set(currentEntries.map(\.itemID))
+		let toRemove = currentEntries.filter { !targetSet.contains($0.itemID) }
+		let toAdd = dedupedTarget.filter { !currentIDs.contains($0) }
+		let total = toRemove.count + toAdd.count
+		
+		favoritesByAccount[client.userID] = current
+		guard total > 0 else { return }
+		
+		var completed = 0
+		progress?(0, total)
+		
+		for entry in toRemove {
+			do {
+				let updated = try await RiotFavoritesClient.removeFavorite(
+					itemID: entry.itemID,
+					favoriteID: entry.id,
+					using: client
+				)
+				favoritesByAccount[client.userID] = updated
+			} catch let FavoriteSyncError.httpError(code, _) where code == 400 || code == 404 {
+				// Ignore stale/missing items on the server so remaining mutations complete.
+			}
+			completed += 1
+			progress?(completed, total)
+		}
+		
+		for id in toAdd {
+			do {
+				let updated = try await RiotFavoritesClient.addFavorite(itemID: id, using: client)
+				favoritesByAccount[client.userID] = updated
+			} catch let FavoriteSyncError.httpError(code, _) where code == 400 || code == 404 {
+				// Ignore unowned items if applying across accounts.
+			}
+			completed += 1
+			progress?(completed, total)
+		}
+		
+		if let finalFavs = try? await client.getFavorites() {
+			favoritesByAccount[client.userID] = finalFavs
 		}
 	}
 }
