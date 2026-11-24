@@ -2,32 +2,12 @@ import SwiftUI
 import ValorantAPI
 import HandyOperators
 
-struct MatchSummaryTabView: View {
+struct MatchHeroBanner: View {
 	let data: MatchViewData
 	let analytics: MatchAnalytics
 	let focusedPlayer: Player
-	var resolvedUsers: [Player.ID: User] = [:]
-	
-	@LocalData var focusedSummary: CareerSummary?
 	
 	@Environment(\.assets) private var assets
-	@Environment(\.seasons) private var seasons
-	@State private var showScoreInfo = false
-	@State private var showBreakdown = false
-	@State private var expandedMetrics: Set<String> = []
-	
-	init(
-		data: MatchViewData,
-		analytics: MatchAnalytics,
-		focusedPlayer: Player,
-		resolvedUsers: [Player.ID: User] = [:]
-	) {
-		self.data = data
-		self.analytics = analytics
-		self.focusedPlayer = focusedPlayer
-		self.resolvedUsers = resolvedUsers
-		self._focusedSummary = .init(id: focusedPlayer.id)
-	}
 	
 	private static let heroDateFormatter: DateFormatter = {
 		let f = DateFormatter()
@@ -44,46 +24,12 @@ struct MatchSummaryTabView: View {
 	}()
 	
 	var body: some View {
-		let stats = analytics.byPlayer[focusedPlayer.id]
-		let comparison = analytics.lobbyComparison(for: focusedPlayer.id)
-		
-		VStack(spacing: 16) {
-			heroCard
-			focusedPlayerCard
-			
-			if let stats {
-				performanceScoreCard(stats: stats)
-				
-				if let comparison {
-					vsLobbyCard(stats: stats, comparison: comparison)
-				}
-				
-				if !data.isMultiTeam && !data.details.roundResults.isEmpty {
-					halvesSection(stats: stats)
-				}
-				
-				if !stats.highlights.isEmpty {
-					highlightsSection(highlights: stats.highlights)
-				}
-			}
-		}
-		.withLocalData($focusedSummary, id: focusedPlayer.id)
-		.alert("Performance Score", isPresented: $showScoreInfo) {
-			Button("OK", role: .cancel) {}
-		} message: {
-			Text("Combines Fight Impact (ACS, K/D, ADR, First Bloods, Multi-kills, Clutches) and Support (KAST, Assists, Trades, Spike objectives) on a 0–500 curve where 250 is average and 420+ is Masterful.")
-		}
-	}
-	
-	// MARK: - Hero Card
-	
-	private var heroCard: some View {
 		let matchInfo = data.details.matchInfo
 		let mapName = assets?.maps[matchInfo.mapID]?.displayName ?? "Map"
 		let subtitle = analytics.serverDisplayName ?? mapName
 		let lengthText = Self.durationFormatter.string(from: matchInfo.gameLength) ?? ""
 		
-		return VStack(spacing: 0) {
+		VStack(spacing: 0) {
 			HStack(alignment: .center, spacing: 10) {
 				GameModeImage(id: matchInfo.modeID)
 					.frame(width: 28, height: 28)
@@ -117,23 +63,24 @@ struct MatchSummaryTabView: View {
 			.padding(.horizontal, 14)
 			.padding(.vertical, 12)
 			
-			ZStack {
-				MapImage.wideImage(matchInfo.mapID)
-					.scaledToFill()
-					.frame(maxWidth: .infinity, minHeight: 88, maxHeight: 88)
-					.clipped()
-				
-				heroScoreBadge
-					.padding(.horizontal, 16)
-					.padding(.vertical, 8)
-					.background(.ultraThinMaterial, in: Capsule())
-					.shadow(color: .black.opacity(0.35), radius: 8, y: 2)
-			}
-			.frame(height: 88)
-			.clipped()
+			Color.clear
+				.frame(height: 88)
+				.frame(maxWidth: .infinity)
+				.background {
+					MapImage.wideImage(matchInfo.mapID)
+						.scaledToFill()
+				}
+				.clipped()
+				.overlay {
+					heroScoreBadge
+						.padding(.horizontal, 16)
+						.padding(.vertical, 8)
+						.background(.ultraThinMaterial, in: Capsule())
+						.shadow(color: .black.opacity(0.35), radius: 8, y: 2)
+				}
 		}
 		.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-		.clipped()
+		.clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
 		.contextMenu {
 			Button {
 				UIPasteboard.general.string = data.details.id.description
@@ -164,6 +111,65 @@ struct MatchSummaryTabView: View {
 				ownTeamID: focusedPlayer.teamID
 			)
 			.font(.title3.bold().monospacedDigit())
+		}
+	}
+}
+
+struct MatchSummaryTabView: View {
+	let data: MatchViewData
+	let analytics: MatchAnalytics
+	let focusedPlayer: Player
+	var resolvedUsers: [Player.ID: User] = [:]
+	
+	@LocalData var focusedSummary: CareerSummary?
+	
+	@Environment(\.assets) private var assets
+	@Environment(\.seasons) private var seasons
+	@State private var showScoreInfo = false
+	@State private var showBreakdown = false
+	@State private var expandedMetrics: Set<String> = []
+	
+	init(
+		data: MatchViewData,
+		analytics: MatchAnalytics,
+		focusedPlayer: Player,
+		resolvedUsers: [Player.ID: User] = [:]
+	) {
+		self.data = data
+		self.analytics = analytics
+		self.focusedPlayer = focusedPlayer
+		self.resolvedUsers = resolvedUsers
+		self._focusedSummary = .init(id: focusedPlayer.id)
+	}
+	
+	var body: some View {
+		let stats = analytics.byPlayer[focusedPlayer.id]
+		let comparison = analytics.lobbyComparison(for: focusedPlayer.id)
+		
+		VStack(spacing: 16) {
+			focusedPlayerCard
+			
+			if let stats {
+				performanceScoreCard(stats: stats)
+				
+				if let comparison {
+					vsLobbyCard(stats: stats, comparison: comparison)
+				}
+				
+				if !data.isMultiTeam && !data.details.roundResults.isEmpty {
+					halvesSection(stats: stats)
+				}
+				
+				if !stats.highlights.isEmpty {
+					highlightsSection(highlights: stats.highlights)
+				}
+			}
+		}
+		.withLocalData($focusedSummary, id: focusedPlayer.id)
+		.alert("Performance Score", isPresented: $showScoreInfo) {
+			Button("OK", role: .cancel) {}
+		} message: {
+			Text("Combines Fight Impact (ACS, K/D, ADR, First Bloods, Multi-kills, Clutches) and Support (KAST, Assists, Trades, Spike objectives) on a 0–500 curve where 250 is average and 420+ is Masterful.")
 		}
 	}
 	

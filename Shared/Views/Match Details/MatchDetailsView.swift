@@ -90,6 +90,13 @@ struct MatchDetailsView: View {
 	private func mainContent(for focusedPlayer: Player) -> some View {
 		ScrollView {
 			VStack(spacing: 16) {
+				MatchHeroBanner(
+					data: focusedData,
+					analytics: analytics,
+					focusedPlayer: focusedPlayer
+				)
+				.padding(.horizontal, 16)
+				
 				tabBar
 				
 				Group {

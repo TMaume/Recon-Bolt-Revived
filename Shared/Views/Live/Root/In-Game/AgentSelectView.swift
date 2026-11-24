@@ -146,6 +146,10 @@ struct AgentSelectView: View {
 			}
 			.font(.title2.weight(.bold))
 			.foregroundStyle(.primary)
+			
+			pregameInfo.team.id.name
+				.font(.subheadline.weight(.semibold))
+				.foregroundStyle(pregameInfo.team.id.color ?? .primary)
 		}
 		.padding()
 		.background(Material.thin)
