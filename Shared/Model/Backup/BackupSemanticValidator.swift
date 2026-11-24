@@ -226,7 +226,8 @@ enum BackupSemanticValidator {
 			guard day.id.count == 10,
 				  isValidDate(day.date, now: now),
 				  day.offerSkinLevelIDs.count <= 16,
-				  (day.nightMarketLevelIDs?.count ?? 0) <= 16 else {
+				  (day.nightMarketLevelIDs?.count ?? 0) <= 16,
+				  (day.accessoryOffers?.count ?? 0) <= 16 else {
 				throw BackupError.semanticValidationFailed("Shop history day entry invalid.")
 			}
 		}
