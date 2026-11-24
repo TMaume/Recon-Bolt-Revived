@@ -12,6 +12,7 @@ struct MatchListView: View {
 	@LocalData var identity: Player.Identity?
 	@State var isEditingFilter = false
 	@State private var agentMastery: AgentMastery? = nil
+	@State private var showingProfileShare = false
 	@State private var masteryFetchTick = 0
 	@State private var matchCacheTick = 0
 	@State private var cachedDetailsSnapshot: [MatchDetails] = []
@@ -231,11 +232,29 @@ struct MatchListView: View {
 					)
 					.symbolVariant(filterStore.filter.isActive ? .fill : .none)
 				}
+				
+				Button {
+					showingProfileShare = true
+				} label: {
+					Label(
+						String(localized: "Share Profile", comment: "Match List: accessibility label"),
+						systemImage: "square.and.arrow.up"
+					)
+				}
 			}
 		}
 		.refreshable { await refresh() }
 		.sheet(isPresented: $isEditingFilter) {
 			MatchListFilterEditor(filter: $filterStore.filter)
+		}
+		.sheet(isPresented: $showingProfileShare) {
+			ShareProfileCardSheet(
+				user: user,
+				cardID: identity?.cardID,
+				titleID: identity?.titleID,
+				accountLevel: identity?.accountLevel ?? 0,
+				summary: summary
+			)
 		}
 		.withLocalData($user, id: userID, shouldAutoUpdate: true)
 		.withLocalData($matchList, id: userID, shouldAutoUpdate: true)

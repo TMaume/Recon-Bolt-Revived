@@ -107,6 +107,12 @@ struct LoadoutDetailsView: View {
 			LoadoutBlockCard {
 				Menu {
 					Button {
+						activeShareCard = .profile
+					} label: {
+						Label("Profile Card", systemImage: "person.text.rectangle")
+					}
+					
+					Button {
 						activeShareCard = .loadout
 					} label: {
 						Label("Loadout Card", systemImage: "scope")
@@ -164,6 +170,14 @@ struct LoadoutDetailsView: View {
 		}
 		.sheet(item: $activeShareCard) { kind in
 			switch kind {
+			case .profile:
+				ShareProfileCardSheet(
+					user: user,
+					cardID: loadout.identity.card,
+					titleID: loadout.identity.title,
+					accountLevel: resolvedAccountLevel,
+					summary: summary
+				)
 			case .loadout:
 				ShareLoadoutCardSheet(loadout: loadout, user: user)
 			case .collection:
