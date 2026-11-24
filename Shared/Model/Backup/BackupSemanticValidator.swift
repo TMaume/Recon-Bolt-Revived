@@ -323,6 +323,7 @@ enum BackupSemanticValidator {
 		}
 		for account in accounts.values {
 			guard account.friendsByJID.count <= 5_000,
+				  account.pinnedFriendJIDs.count <= 5_000,
 				  account.changeEvents.count <= 1_000 else {
 				throw BackupError.semanticValidationFailed("Social friends payload exceeds valid limits.")
 			}
