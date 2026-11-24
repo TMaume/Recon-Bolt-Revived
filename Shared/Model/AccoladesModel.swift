@@ -39,7 +39,7 @@ enum AccoladeType: String, CaseIterable, Identifiable {
 		switch self {
 		case .mvp: return "Get the highest Performance Score in a match"
 		case .topFrag: return "Get the most kills in a match"
-		case .masterful: return "Reach a Performance Score of 400 or higher in a match"
+		case .masterful: return "Reach a Performance Score of 420 or higher in a match"
 		case .kills: return "Get 20 or more kills in a match"
 		case .damage: return "Deal the highest damage per round or 165+ ADR"
 		case .headshots: return "Achieve 35% or higher headshot accuracy (10+ hits)"
@@ -122,6 +122,22 @@ struct AccoladeSummary: Identifiable {
 	var byAct: [AccoladeActBreakdown]
 }
 
+struct AccoladeMatchItem: Identifiable, Hashable {
+	var id: AccoladeType { type }
+	var type: AccoladeType
+	var value: Int
+	var isNewBest: Bool = false
+}
+
+struct AccoladeMatchGroup: Identifiable, Hashable {
+	var id: Match.ID { matchID }
+	var matchID: Match.ID
+	var mapID: MapID
+	var seasonID: Season.ID
+	var gameStart: Date
+	var accolades: [AccoladeMatchItem]
+}
+
 struct AccoladesReport {
 	var totalEarned: Int
 	var earnedTypesCount: Int
@@ -131,6 +147,7 @@ struct AccoladesReport {
 	var allItems: [AccoladeSummary]
 	/// Subset of accolades earned at least once in this scope, sorted by count descending.
 	var earnedItems: [AccoladeSummary]
+	var recentMatches: [AccoladeMatchGroup] = []
 }
 
 private struct RawMatchAccoladeHit {
@@ -158,12 +175,17 @@ enum AccoladesCalculator {
 			return false
 		}
 		
-		let allScopedMatchesCount: Int = {
-			guard act != nil else { return matches.count }
-			return matches.filter { m in
-				(thisActID != nil && m.matchInfo.seasonID == thisActID)
-					|| (thisActTimeSpan?.contains(m.matchInfo.gameStart) == true)
-			}.count
+		let scopedMatches: [MatchDetails] = {
+			let filtered: [MatchDetails]
+			if act != nil {
+				filtered = matches.filter { m in
+					(thisActID != nil && m.matchInfo.seasonID == thisActID)
+						|| (thisActTimeSpan?.contains(m.matchInfo.gameStart) == true)
+				}
+			} else {
+				filtered = matches
+			}
+			return filtered.sorted { $0.matchInfo.gameStart > $1.matchInfo.gameStart }
 		}()
 		
 		let allSummaries = AccoladeType.allCases.map { type -> AccoladeSummary in
@@ -194,6 +216,28 @@ enum AccoladesCalculator {
 			)
 		}
 		
+		var recordsByMatch: [Match.ID: [AccoladeType: AccoladeMatchRecord]] = [:]
+		for summary in allSummaries {
+			for record in summary.records {
+				recordsByMatch[record.matchID, default: [:]][summary.type] = record
+			}
+		}
+		
+		let recentMatches = scopedMatches.prefix(20).map { match in
+			let matchMap = recordsByMatch[match.id] ?? [:]
+			let items = AccoladeType.allCases.compactMap { type -> AccoladeMatchItem? in
+				guard let record = matchMap[type] else { return nil }
+				return AccoladeMatchItem(type: type, value: record.value, isNewBest: record.isNewBest)
+			}
+			return AccoladeMatchGroup(
+				matchID: match.id,
+				mapID: match.matchInfo.mapID,
+				seasonID: match.matchInfo.seasonID,
+				gameStart: match.matchInfo.gameStart,
+				accolades: items
+			)
+		}
+		
 		let earned = allSummaries
 			.filter { $0.count > 0 }
 			.sorted {
@@ -205,9 +249,10 @@ enum AccoladesCalculator {
 			totalEarned: allSummaries.reduce(0) { $0 + $1.count },
 			earnedTypesCount: earned.count,
 			totalTypesCount: AccoladeType.allCases.count,
-			scannedMatchesCount: allScopedMatchesCount,
+			scannedMatchesCount: scopedMatches.count,
 			allItems: allSummaries,
-			earnedItems: earned
+			earnedItems: earned,
+			recentMatches: recentMatches
 		)
 	}
 	
@@ -254,96 +299,88 @@ enum AccoladesCalculator {
 		.sorted { $0.sortDate > $1.sortDate }
 	}
 	
-	private static func collectHits(
-		userID: User.ID,
-		matches: [MatchDetails]
-	) -> [AccoladeType: [RawMatchAccoladeHit]] {
-		var result: [AccoladeType: [RawMatchAccoladeHit]] = [:]
-		func record(_ type: AccoladeType, _ match: MatchDetails, value: Int) {
-			result[type, default: []].append(RawMatchAccoladeHit(
-				matchID: match.id,
-				mapID: match.matchInfo.mapID,
-				seasonID: match.matchInfo.seasonID,
-				gameStart: match.matchInfo.gameStart,
-				value: value
-			))
-		}
+	static func accolades(
+		for playerID: Player.ID,
+		in match: MatchDetails,
+		analytics: MatchAnalytics? = nil
+	) -> [AccoladeMatchItem] {
+		guard let player = match.players.firstElement(withID: playerID),
+			  let stats = player.stats else { return [] }
 		
-		for match in matches {
-			guard let player = match.players.firstElement(withID: userID),
-				  let stats = player.stats else { continue }
+		let roundsPlayed = max(1, stats.roundsPlayed)
+		let teamByPlayer = Dictionary(uniqueKeysWithValues: match.players.map { ($0.id, $0.teamID) })
+		
+		var damageByPlayer: [Player.ID: Int] = [:]
+		var firstKillsByPlayer: [Player.ID: Int] = [:]
+		var tradesByPlayer: [Player.ID: Int] = [:]
+		var clutchesByPlayer: [Player.ID: Int] = [:]
+		var acesByPlayer: [Player.ID: Int] = [:]
+		var headshots = 0
+		var totalHits = 0
+		var userSpikeActions = 0
+		
+		for round in match.roundResults {
+			if round.plant?.actor == playerID { userSpikeActions += 1 }
+			if round.defusal?.actor == playerID { userSpikeActions += 1 }
 			
-			let roundsPlayed = max(1, stats.roundsPlayed)
-			let teamByPlayer = Dictionary(uniqueKeysWithValues: match.players.map { ($0.id, $0.teamID) })
+			let roundKills = round.playerStats
+				.flatMap(\.kills)
+				.sorted { $0.roundTimeMillis < $1.roundTimeMillis }
 			
-			var damageByPlayer: [Player.ID: Int] = [:]
-			var firstKillsByPlayer: [Player.ID: Int] = [:]
-			var tradesByPlayer: [Player.ID: Int] = [:]
-			var clutchesByPlayer: [Player.ID: Int] = [:]
-			var acesByPlayer: [Player.ID: Int] = [:]
-			var headshots = 0
-			var totalHits = 0
-			var userSpikeActions = 0
+			if let opener = roundKills.first?.killer {
+				firstKillsByPlayer[opener, default: 0] += 1
+			}
 			
-			for round in match.roundResults {
-				if round.plant?.actor == userID { userSpikeActions += 1 }
-				if round.defusal?.actor == userID { userSpikeActions += 1 }
-				
-				let roundKills = round.playerStats
-					.flatMap(\.kills)
-					.sorted { $0.roundTimeMillis < $1.roundTimeMillis }
-				
-				if let opener = roundKills.first?.killer {
-					firstKillsByPlayer[opener, default: 0] += 1
+			var killsInRound: [Player.ID: Int] = [:]
+			for kill in roundKills {
+				if let killer = kill.killer {
+					killsInRound[killer, default: 0] += 1
 				}
-				
-				var killsInRound: [Player.ID: Int] = [:]
-				for kill in roundKills {
-					if let killer = kill.killer {
-						killsInRound[killer, default: 0] += 1
-					}
+			}
+			for (killerID, count) in killsInRound where count >= 5 {
+				acesByPlayer[killerID, default: 0] += 1
+			}
+			
+			// A trade is a kill within 5000ms against an opponent who just killed a teammate.
+			var lastVictimKillTimeByKiller: [Player.ID: (victimTeam: Team.ID, time: Int)] = [:]
+			for kill in roundKills {
+				guard let killer = kill.killer else { continue }
+				let victim = kill.victim
+				if let killerTeam = teamByPlayer[killer],
+				   let prior = lastVictimKillTimeByKiller[victim],
+				   prior.victimTeam == killerTeam,
+				   kill.roundTimeMillis - prior.time <= 5000 {
+					tradesByPlayer[killer, default: 0] += 1
 				}
-				for (killerID, count) in killsInRound where count >= 5 {
-					acesByPlayer[killerID, default: 0] += 1
-				}
-				
-				// A trade is a kill within 5000ms against an opponent who just killed a teammate.
-				var lastVictimKillTimeByKiller: [Player.ID: (victimTeam: Team.ID, time: Int)] = [:]
-				for kill in roundKills {
-					guard let killer = kill.killer else { continue }
-					let victim = kill.victim
-					if let killerTeam = teamByPlayer[killer],
-					   let prior = lastVictimKillTimeByKiller[victim],
-					   prior.victimTeam == killerTeam,
-					   kill.roundTimeMillis - prior.time <= 5000 {
-						tradesByPlayer[killer, default: 0] += 1
-					}
-					if let victimTeam = teamByPlayer[victim] {
-						lastVictimKillTimeByKiller[killer] = (victimTeam, kill.roundTimeMillis)
-					}
-				}
-				
-				if round.ceremony.lowercased().contains("clutch") {
-					let deadPlayers = Set(roundKills.map(\.victim))
-					for p in match.players where p.teamID == round.winningTeam && !deadPlayers.contains(p.id) {
-						clutchesByPlayer[p.id, default: 0] += 1
-					}
-				}
-				
-				for ps in round.playerStats {
-					let dmg = ps.damageDealt.reduce(0) { $0 + $1.damage }
-					damageByPlayer[ps.subject, default: 0] += dmg
-					if ps.subject == userID {
-						for d in ps.damageDealt {
-							headshots += d.headshots
-							totalHits += d.headshots + d.bodyshots + d.legshots
-						}
-					}
+				if let victimTeam = teamByPlayer[victim] {
+					lastVictimKillTimeByKiller[killer] = (victimTeam, kill.roundTimeMillis)
 				}
 			}
 			
-			// Compute a 0...500 Performance Score per player in the lobby so MVP and Masterful share one scale.
-			var perfScores: [Player.ID: Int] = [:]
+			if round.ceremony.lowercased().contains("clutch") {
+				let deadPlayers = Set(roundKills.map(\.victim))
+				for p in match.players where p.teamID == round.winningTeam && !deadPlayers.contains(p.id) {
+					clutchesByPlayer[p.id, default: 0] += 1
+				}
+			}
+			
+			for ps in round.playerStats {
+				let dmg = ps.damageDealt.reduce(0) { $0 + $1.damage }
+				damageByPlayer[ps.subject, default: 0] += dmg
+				if ps.subject == playerID {
+					for d in ps.damageDealt {
+						headshots += d.headshots
+						totalHits += d.headshots + d.bodyshots + d.legshots
+					}
+				}
+			}
+		}
+		
+		let perfScores: [Player.ID: Int]
+		if let analytics, !analytics.byPlayer.isEmpty {
+			perfScores = analytics.byPlayer.mapValues(\.performanceScore)
+		} else {
+			var computed: [Player.ID: Int] = [:]
 			for p in match.players {
 				guard let s = p.stats, s.roundsPlayed > 0 else { continue }
 				let acs = Double(s.score) / Double(s.roundsPlayed)
@@ -355,71 +392,94 @@ enum AccoladesCalculator {
 				let kdDiff = Double(max(0, s.kills - s.deaths))
 				let raw = acs * Double(1.05) + kdDiff * Double(6.0) + adr * Double(0.45)
 					+ fk * Double(14.0) + tr * Double(10.0) + cl * Double(28.0) + ac * Double(45.0)
-				perfScores[p.id] = min(500, max(0, Int(raw.rounded())))
+				computed[p.id] = min(500, max(0, Int(raw.rounded())))
 			}
-			
-			let myPerf = perfScores[userID, default: 0]
-			let maxPerf = perfScores.values.max() ?? 0
-			if myPerf > 0 && myPerf >= maxPerf {
-				record(.mvp, match, value: myPerf)
-			}
-			if myPerf >= 400 {
-				record(.masterful, match, value: myPerf)
-			}
-			
-			let maxKills = match.players.compactMap(\.stats?.kills).max() ?? 0
-			if stats.kills > 0 && stats.kills == maxKills {
-				record(.topFrag, match, value: stats.kills)
-			}
-			if stats.kills >= 20 {
-				record(.kills, match, value: stats.kills)
-			}
-			
-			let myDmg = damageByPlayer[userID, default: 0]
-			let myADR = Int((Double(myDmg) / Double(roundsPlayed)).rounded())
-			let maxDmg = damageByPlayer.values.max() ?? 0
-			if myADR >= 165 || (myDmg > 0 && myDmg == maxDmg) {
-				record(.damage, match, value: myADR)
-			}
-			
-			if totalHits >= 10 {
-				let hsPct = Int((Double(headshots) * Double(100) / Double(totalHits)).rounded())
-				if hsPct >= 35 {
-					record(.headshots, match, value: hsPct)
-				}
-			}
-			
-			let myFK = firstKillsByPlayer[userID, default: 0]
-			let maxFK = firstKillsByPlayer.values.max() ?? 0
-			if myFK >= 3 || (myFK >= 2 && myFK == maxFK) {
-				record(.firstBloods, match, value: myFK)
-			}
-			
-			let myAces = acesByPlayer[userID, default: 0]
-			if myAces >= 1 {
-				record(.aces, match, value: myAces)
-			}
-			
-			let myClutches = clutchesByPlayer[userID, default: 0]
-			if myClutches >= 1 {
-				record(.clutches, match, value: myClutches)
-			}
-			
-			let myTrades = tradesByPlayer[userID, default: 0]
-			if myTrades >= 3 {
-				record(.trades, match, value: myTrades)
-			}
-			
-			let maxAssists = match.players.compactMap(\.stats?.assists).max() ?? 0
-			if stats.assists >= 10 || (stats.assists >= 5 && stats.assists == maxAssists) {
-				record(.assists, match, value: stats.assists)
-			}
-			
-			if userSpikeActions >= 3 {
-				record(.spikePlants, match, value: userSpikeActions)
+			perfScores = computed
+		}
+		
+		var earned: [AccoladeType: Int] = [:]
+		let myPerf = perfScores[playerID, default: 0]
+		let maxPerf = perfScores.values.max() ?? 0
+		if myPerf > 0 && myPerf >= maxPerf {
+			earned[.mvp] = myPerf
+		}
+		if myPerf >= 420 {
+			earned[.masterful] = myPerf
+		}
+		
+		let maxKills = match.players.compactMap(\.stats?.kills).max() ?? 0
+		if stats.kills > 0 && stats.kills == maxKills {
+			earned[.topFrag] = stats.kills
+		}
+		if stats.kills >= 20 {
+			earned[.kills] = stats.kills
+		}
+		
+		let myDmg = damageByPlayer[playerID, default: 0]
+		let myADR = Int((Double(myDmg) / Double(roundsPlayed)).rounded())
+		let maxDmg = damageByPlayer.values.max() ?? 0
+		if myADR >= 165 || (myDmg > 0 && myDmg == maxDmg) {
+			earned[.damage] = myADR
+		}
+		
+		if totalHits >= 10 {
+			let hsPct = Int((Double(headshots) * Double(100) / Double(totalHits)).rounded())
+			if hsPct >= 35 {
+				earned[.headshots] = hsPct
 			}
 		}
 		
+		let myFK = firstKillsByPlayer[playerID, default: 0]
+		let maxFK = firstKillsByPlayer.values.max() ?? 0
+		if myFK >= 3 || (myFK >= 2 && myFK == maxFK) {
+			earned[.firstBloods] = myFK
+		}
+		
+		let myAces = acesByPlayer[playerID, default: 0]
+		if myAces >= 1 {
+			earned[.aces] = myAces
+		}
+		
+		let myClutches = clutchesByPlayer[playerID, default: 0]
+		if myClutches >= 1 {
+			earned[.clutches] = myClutches
+		}
+		
+		let myTrades = tradesByPlayer[playerID, default: 0]
+		if myTrades >= 3 {
+			earned[.trades] = myTrades
+		}
+		
+		let maxAssists = match.players.compactMap(\.stats?.assists).max() ?? 0
+		if stats.assists >= 10 || (stats.assists >= 5 && stats.assists == maxAssists) {
+			earned[.assists] = stats.assists
+		}
+		
+		if userSpikeActions >= 3 {
+			earned[.spikePlants] = userSpikeActions
+		}
+		
+		return AccoladeType.allCases.compactMap { type in
+			earned[type].map { AccoladeMatchItem(type: type, value: $0) }
+		}
+	}
+	
+	private static func collectHits(
+		userID: User.ID,
+		matches: [MatchDetails]
+	) -> [AccoladeType: [RawMatchAccoladeHit]] {
+		var result: [AccoladeType: [RawMatchAccoladeHit]] = [:]
+		for match in matches {
+			for item in accolades(for: userID, in: match) {
+				result[item.type, default: []].append(RawMatchAccoladeHit(
+					matchID: match.id,
+					mapID: match.matchInfo.mapID,
+					seasonID: match.matchInfo.seasonID,
+					gameStart: match.matchInfo.gameStart,
+					value: item.value
+				))
+			}
+		}
 		return result
 	}
 }

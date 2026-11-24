@@ -160,6 +160,15 @@ struct MatchSummaryTabView: View {
 					halvesSection(stats: stats)
 				}
 				
+				let matchAccolades = AccoladesCalculator.accolades(
+					for: focusedPlayer.id,
+					in: data.details,
+					analytics: analytics
+				)
+				if !matchAccolades.isEmpty {
+					accoladesSection(accolades: matchAccolades)
+				}
+				
 				if !stats.highlights.isEmpty {
 					highlightsSection(highlights: stats.highlights)
 				}
@@ -614,6 +623,24 @@ struct MatchSummaryTabView: View {
 		}
 	}
 	
+	// MARK: - Accolades
+	
+	private func accoladesSection(accolades: [AccoladeMatchItem]) -> some View {
+		VStack(alignment: .leading, spacing: 8) {
+			Text("ACCOLADES")
+				.font(.caption.weight(.semibold))
+				.foregroundStyle(.secondary)
+				.padding(.horizontal, 4)
+			
+			HighlightFlowLayout(spacing: 8) {
+				ForEach(accolades) { item in
+					AccoladePillView(item: item, showNewBest: false)
+				}
+			}
+			.frame(maxWidth: .infinity, alignment: .leading)
+		}
+	}
+	
 	// MARK: - Match Highlights
 	
 	private func highlightsSection(highlights: [MatchAnalytics.MatchHighlight]) -> some View {
@@ -773,7 +800,7 @@ private struct PerformanceBellCurveView: View {
 
 // MARK: - Wrapping Flow Layout (iOS 16+)
 
-private struct HighlightFlowLayout: Layout {
+struct HighlightFlowLayout: Layout {
 	var spacing: CGFloat = 8
 	
 	func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
