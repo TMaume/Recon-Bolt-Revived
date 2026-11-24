@@ -4,21 +4,26 @@ import AVKit
 // TODO: remove this when FB9309847 (using implicit CGFloat–Double conversion breaks preview bounds display) is addressed
 typealias FloatLiteralType = CGFloat
 
+@MainActor
+private final class AppServices {
+	let bookmarkList = BookmarkList()
+	let loadoutPresetManager = LoadoutPresetManager()
+	let wishlistManager = WishlistManager()
+	let shopHistoryStore = ShopHistoryStore()
+	let playerSettingsSnapshotStore = PlayerSettingsSnapshotStore()
+	let seasonGoalStore = SeasonGoalStore()
+	let socialManager = SocialManager()
+	let lineupsManager = LineupsManager()
+}
+
 @main
 struct ReconBoltApp: App {
 	@StateObject var accountManager = AccountManager()
 	@StateObject var assetManager = AssetManager()
-	@StateObject var bookmarkList = BookmarkList()
 	@StateObject var settings = AppSettings()
 	@StateObject var store = InAppStore()
 	@StateObject var configManager = GameConfigManager()
-	@StateObject var loadoutPresetManager = LoadoutPresetManager()
-	@StateObject var wishlistManager = WishlistManager()
-	@StateObject var shopHistoryStore = ShopHistoryStore()
-	@StateObject var playerSettingsSnapshotStore = PlayerSettingsSnapshotStore()
-	@StateObject var seasonGoalStore = SeasonGoalStore()
-	@StateObject var socialManager = SocialManager()
-	@StateObject var lineupsManager = LineupsManager()
+	private let services = AppServices()
 	@State private var hasLaunched = false
 	
 	private var isTesting: Bool {
@@ -36,18 +41,18 @@ struct ReconBoltApp: App {
 						store: store
 					)
 					.environmentObject(accountManager)
-					.environmentObject(bookmarkList)
+					.environmentObject(services.bookmarkList)
 					.environmentObject(settings)
 					.environmentObject(configManager)
-					.environmentObject(loadoutPresetManager)
-					.environmentObject(wishlistManager)
-					.environmentObject(shopHistoryStore)
+					.environmentObject(services.loadoutPresetManager)
+					.environmentObject(services.wishlistManager)
+					.environmentObject(services.shopHistoryStore)
 					.environmentObject(UsernameHistoryStore.shared)
-					.environmentObject(playerSettingsSnapshotStore)
-					.environmentObject(seasonGoalStore)
-					.environmentObject(socialManager)
-					.environmentObject(socialManager.onlineCountModel)
-					.environmentObject(lineupsManager)
+					.environmentObject(services.playerSettingsSnapshotStore)
+					.environmentObject(services.seasonGoalStore)
+					.environmentObject(services.socialManager)
+					.environmentObject(services.socialManager.onlineCountModel)
+					.environmentObject(services.lineupsManager)
 					.environment(\.configs, configManager.configs())
 					.environment(\.assets, assetManager.assets)
 					.environment(\.location, accountManager.activeAccount?.location)
@@ -66,10 +71,10 @@ struct ReconBoltApp: App {
 					AppSettings.applyGlobalTint(settings.effectiveAccentColor)
 				}
 				.task(id: accountManager.activeAccount?.id) {
-					await socialManager.connectIfNeeded(using: accountManager.activeAccount?.client)
+					await services.socialManager.connectIfNeeded(using: accountManager.activeAccount?.client)
 				}
 				.modifier(SocialSceneLifecycleModifier(
-					socialManager: socialManager,
+					socialManager: services.socialManager,
 					accountManager: accountManager
 				))
 				.task(id: assetManager.assets?.version) {
@@ -87,6 +92,7 @@ struct ReconBoltApp: App {
 		ReviewManager.registerUsage(points: 2)
 		AppSettings.applyGlobalTint(settings.effectiveAccentColor)
 		
+		let bookmarkList = services.bookmarkList
 		Task {
 			_ = await MatchRetentionManager.pruneIfEnabled(
 				settings: settings,

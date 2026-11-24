@@ -26,6 +26,7 @@ struct MatchDetailsView: View {
 	@State private var resolvedUsers: [Player.ID: User] = [:]
 	@State private var menuAgentIcons: [Player.ID: UIImage] = [:]
 	@State private var isRefreshingProfiles = false
+	@State private var refreshProfilesTask: Task<Void, Never>?
 	@State private var isShowingShareSheet = false
 	
 	@Environment(\.valorantLoad) private var load
@@ -183,6 +184,10 @@ struct MatchDetailsView: View {
 		}
 		.task(id: MenuIconTaskKey(matchID: data.details.id, version: assets?.version)) {
 			await prepareMenuAgentIcons()
+		}
+		.onDisappear {
+			refreshProfilesTask?.cancel()
+			refreshProfilesTask = nil
 		}
 	}
 	
@@ -350,7 +355,8 @@ struct MatchDetailsView: View {
 			}
 			
 			Button {
-				Task { await refreshAllProfiles() }
+				refreshProfilesTask?.cancel()
+				refreshProfilesTask = Task { await refreshAllProfiles() }
 			} label: {
 				Label("Refresh Profiles", systemImage: "arrow.clockwise")
 			}
@@ -553,7 +559,7 @@ struct MatchDetailsView: View {
 		guard !missingIDs.isEmpty else { return }
 		await load { client in
 			let fetched = try await client.getUsers(for: missingIDs)
-			await LocalDataProvider.shared.userManager.store(fetched, asOf: .now)
+			LocalDataProvider.shared.userManager.store(fetched, asOf: .now)
 		}
 		await syncCachedUsers()
 	}
@@ -565,12 +571,33 @@ struct MatchDetailsView: View {
 		await load { client in
 			let ids = data.details.players.map(\.id)
 			if let fetched = try? await client.getUsers(for: ids) {
-				await LocalDataProvider.shared.userManager.store(fetched, asOf: .now)
+				LocalDataProvider.shared.userManager.store(fetched, asOf: .now)
 			}
-			for playerID in ids {
-				try? await client.fetchCareerSummary(for: playerID, forceFetch: true)
+			await withTaskGroup(of: Void.self) { group in
+				var nextIndex = 0
+				let maxConcurrent = 4
+				for _ in 0..<min(maxConcurrent, ids.count) {
+					let playerID = ids[nextIndex]
+					nextIndex += 1
+					group.addTask {
+						guard !Task.isCancelled else { return }
+						try? await client.fetchCareerSummary(for: playerID, forceFetch: true)
+					}
+				}
+				for await _ in group {
+					if Task.isCancelled { break }
+					if nextIndex < ids.count {
+						let nextID = ids[nextIndex]
+						nextIndex += 1
+						group.addTask {
+							guard !Task.isCancelled else { return }
+							try? await client.fetchCareerSummary(for: nextID, forceFetch: true)
+						}
+					}
+				}
 			}
 		}
+		guard !Task.isCancelled else { return }
 		await syncCachedUsers()
 	}
 }

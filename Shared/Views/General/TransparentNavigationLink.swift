@@ -1,4 +1,5 @@
 import SwiftUI
+import ValorantAPI
 
 /// A ``NavigationLink`` that passes through explicit environment values (`anonymization` and `location`)
 /// without capturing the entire SwiftUI `EnvironmentValues` snapshot on every cell.

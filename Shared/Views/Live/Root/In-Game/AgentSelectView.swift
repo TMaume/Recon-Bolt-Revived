@@ -9,6 +9,7 @@ struct AgentSelectView: View {
 	
 	@Environment(\.valorantLoad) private var load
 	@Environment(\.dismiss) private var dismiss
+	@Environment(\.scenePhase) private var scenePhase
 	
 	var body: some View {
 		ScrollView {
@@ -61,15 +62,25 @@ struct AgentSelectView: View {
 		.overlay(alignment: .top) { infoBox }
 		.navigationTitle("Agent Select")
 		.navigationBarTitleDisplayMode(.inline)
-		.task {
-			while !Task.isCancelled, !hasEnded {
-				await refresh()
-				await Task.sleep(seconds: 1, tolerance: 0.1)
+		.task(id: scenePhase) {
+			guard scenePhase == .active, !hasEnded, pregameInfo.state != .provisioned else { return }
+			while !Task.isCancelled, !hasEnded, pregameInfo.state != .provisioned {
+				let hadError = await refresh()
+				guard !Task.isCancelled, !hasEnded, pregameInfo.state != .provisioned else { break }
+				let interval: TimeInterval = hadError
+					? 5.0
+					: (pregameInfo.timeRemainingInPhase <= 15 ? 1.5 : 2.5)
+				do {
+					try await Task.sleep(for: .seconds(interval), tolerance: .milliseconds(250))
+				} catch {
+					break
+				}
 			}
 		}
 	}
 	
-	func refresh() async {
+	func refresh() async -> Bool {
+		var hadError = false
 		await load {
 			do {
 				pregameInfo = try await $0.getLivePregameInfo(pregameInfo.id)
@@ -78,8 +89,12 @@ struct AgentSelectView: View {
 				APIError.resourceNotFound
 			{
 				hasEnded = true
+			} catch {
+				hadError = true
+				throw error
 			}
 		}
+		return hadError
 	}
 	
 	@ViewBuilder
