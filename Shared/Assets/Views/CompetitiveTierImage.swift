@@ -45,7 +45,6 @@ struct CompetitiveTierImage_Previews: PreviewProvider {
 		}
 		.fixedSize()
 		.padding()
-		.environmentObject(ImageManager())
 		.background(Color(.darkGray))
 		.previewLayout(.sizeThatFits)
 	}

@@ -585,7 +585,7 @@ private struct MatchShareSheet: View {
 	
 	@Environment(\.assets) private var assets
 	@Environment(\.dismiss) private var dismiss
-	@EnvironmentObject private var imageManager: ImageManager
+	@Environment(\.imageManager) private var imageManager
 	
 	@State private var renderedImage: UIImage?
 	@State private var isRendering = false
@@ -721,30 +721,21 @@ private struct MatchShareSheet: View {
 	@MainActor
 	private func renderSnapshot() async {
 		isRendering = true
-		var targets: [AssetImage] = []
-		if let mapImg = assets?.maps[data.details.matchInfo.mapID]?.listViewIcon {
-			targets.append(mapImg)
-		}
-		if let aid = focusedPlayer.agentID, let agentImg = assets?.agents[aid]?.displayIcon {
-			targets.append(agentImg)
-		}
+		let mapImg = assets?.maps[data.details.matchInfo.mapID]?.listViewIcon
+		let agentImg = focusedPlayer.agentID.flatMap { assets?.agents[$0]?.displayIcon }
 		
 		var loaded: [AssetImage: UIImage] = [:]
-		for asset in targets {
-			if let cached = asset.load() {
-				loaded[asset] = cached
-			} else {
-				_ = try? await asset.ensureDownloaded()
-				if let dl = asset.load() {
-					loaded[asset] = dl
-				}
-			}
+		if let mapImg, let ui = await imageManager.awaitImage(for: mapImg, bucket: .banner) {
+			loaded[mapImg] = ui
+		}
+		if let agentImg, let ui = await imageManager.awaitImage(for: agentImg, bucket: .icon) {
+			loaded[agentImg] = ui
 		}
 		
 		let renderer = ImageRenderer(
 			content: snapshotCard(preloaded: loaded)
 				.environment(\.assets, assets)
-				.environmentObject(imageManager)
+				.environment(\.imageManager, imageManager)
 				.frame(width: 360)
 				.preferredColorScheme(.dark)
 		)

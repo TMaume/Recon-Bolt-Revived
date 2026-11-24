@@ -9,7 +9,6 @@ struct ReconBoltApp: App {
 	@StateObject var accountManager = AccountManager()
 	@StateObject var assetManager = AssetManager()
 	@StateObject var bookmarkList = BookmarkList()
-	@StateObject var imageManager = ImageManager()
 	@StateObject var settings = AppSettings()
 	@StateObject var store = InAppStore()
 	@StateObject var configManager = GameConfigManager()
@@ -38,7 +37,6 @@ struct ReconBoltApp: App {
 					)
 					.environmentObject(accountManager)
 					.environmentObject(bookmarkList)
-					.environmentObject(imageManager)
 					.environmentObject(settings)
 					.environmentObject(configManager)
 					.environmentObject(loadoutPresetManager)
@@ -75,9 +73,10 @@ struct ReconBoltApp: App {
 					accountManager: accountManager
 				))
 				.task(id: assetManager.assets?.version) {
-					guard let version = assetManager.assets?.version else { return }
-					accountManager.clientVersion = version.riotClientVersion
-					imageManager.setVersion(version)
+					guard let assets = assetManager.assets else { return }
+					accountManager.clientVersion = assets.version.riotClientVersion
+					ImageManager.shared.setVersion(assets.version)
+					ImageManager.shared.prewarmHotAssets(from: assets)
 				}
 			}
 		}

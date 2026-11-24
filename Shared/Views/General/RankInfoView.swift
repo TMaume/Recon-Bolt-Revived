@@ -209,7 +209,6 @@ struct RankInfoView_Previews: PreviewProvider, PreviewProviderWithAssets {
 			.previewDisplayName("Grid")
 		}
 		.previewLayout(.sizeThatFits)
-		.environmentObject(ImageManager())
 	}
 }
 #endif

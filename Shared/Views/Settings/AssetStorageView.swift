@@ -2,7 +2,7 @@ import SwiftUI
 
 struct AssetStorageView: View {
 	@ObservedObject var assetManager: AssetManager
-	@EnvironmentObject private var imageManager: ImageManager
+	@Environment(\.imageManager) private var imageManager
 	
 	@State private var newestVersion: AssetVersion?
 	@State private var isCheckingUpdates = false
@@ -86,8 +86,10 @@ struct AssetStorageView: View {
 						SettingsRowDivider(leadingInset: 16)
 						
 						Button {
-							imageManager.clear()
-							Task { await refreshSizes() }
+							Task {
+								await imageManager.clear()
+								await refreshSizes()
+							}
 						} label: {
 							HStack {
 								Text("Clear Cached Images")
@@ -338,7 +340,7 @@ struct AssetStorageView: View {
 
 struct RepairGameAssetsView: View {
 	@ObservedObject var assetManager: AssetManager
-	@EnvironmentObject private var imageManager: ImageManager
+	@Environment(\.imageManager) private var imageManager
 	@State private var isRepairing = false
 	@State private var repairFinished = false
 	

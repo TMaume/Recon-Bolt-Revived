@@ -214,7 +214,7 @@ struct LoadoutPresetInspectorView: View {
 struct LoadoutShareSheet: View {
 	var loadout: UpdatableLoadout
 	
-	@EnvironmentObject private var imageManager: ImageManager
+	@Environment(\.imageManager) private var imageManager
 	@Environment(\.assets) private var assets
 	@Environment(\.dismiss) private var dismiss
 	@State private var preloadedImages: [AssetImage: UIImage] = [:]
@@ -344,13 +344,16 @@ struct LoadoutShareSheet: View {
 		}
 		
 		var loaded: [AssetImage: UIImage] = [:]
-		for asset in targets {
-			if let cached = asset.load() {
-				loaded[asset] = cached
-			} else {
-				_ = try? await asset.ensureDownloaded()
-				if let downloaded = asset.load() {
-					loaded[asset] = downloaded
+		await withTaskGroup(of: (AssetImage, UIImage?).self) { group in
+			for asset in targets {
+				group.addTask { [imageManager] in
+					let img = await imageManager.awaitImage(for: asset, bucket: .full)
+					return (asset, img)
+				}
+			}
+			for await (asset, img) in group {
+				if let img {
+					loaded[asset] = img
 				}
 			}
 		}
@@ -359,7 +362,7 @@ struct LoadoutShareSheet: View {
 		let renderer = ImageRenderer(
 			content: snapshotCardView(images: loaded, useLiveFallback: false)
 				.environment(\.assets, assets)
-				.environmentObject(imageManager)
+				.environment(\.imageManager, imageManager)
 				.frame(width: 360)
 				.preferredColorScheme(.dark)
 		)

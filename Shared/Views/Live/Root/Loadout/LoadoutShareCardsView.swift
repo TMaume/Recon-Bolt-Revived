@@ -78,7 +78,7 @@ struct ShareLoadoutCardSheet: View {
 	let loadout: UpdatableLoadout
 	let user: User?
 	
-	@EnvironmentObject private var imageManager: ImageManager
+	@Environment(\.imageManager) private var imageManager
 	@Environment(\.assets) private var assets
 	@Environment(\.dismiss) private var dismiss
 	
@@ -797,17 +797,39 @@ private enum SnapshotImageLoader {
 	) async -> [AssetImage: UIImage] {
 		var result = existing
 		var missing: [AssetImage] = []
-		for asset in targets where result[asset] == nil {
-			if let cached = asset.load() {
+		var seen: Set<AssetImage> = []
+		for asset in targets where result[asset] == nil && seen.insert(asset).inserted {
+			if let cached = imageManager.cachedImage(for: asset, bucket: .full) {
 				result[asset] = cached
 			} else {
 				missing.append(asset)
 			}
 		}
-		for asset in missing {
-			_ = await imageManager.awaitImage(for: asset)
-			if let downloaded = asset.load() {
-				result[asset] = downloaded
+		guard !missing.isEmpty else { return result }
+		
+		await withTaskGroup(of: (AssetImage, UIImage?).self) { group in
+			var nextIndex = 0
+			let maxConcurrent = 4
+			for _ in 0..<min(maxConcurrent, missing.count) {
+				let asset = missing[nextIndex]
+				nextIndex += 1
+				group.addTask {
+					let loaded = await imageManager.awaitImage(for: asset, bucket: .full)
+					return (asset, loaded)
+				}
+			}
+			for await (asset, loaded) in group {
+				if let loaded {
+					result[asset] = loaded
+				}
+				if nextIndex < missing.count {
+					let nextAsset = missing[nextIndex]
+					nextIndex += 1
+					group.addTask {
+						let loaded = await imageManager.awaitImage(for: nextAsset, bucket: .full)
+						return (nextAsset, loaded)
+					}
+				}
 			}
 		}
 		return result

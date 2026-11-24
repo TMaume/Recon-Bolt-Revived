@@ -95,8 +95,8 @@ final class AssetManager: ObservableObject {
 		return true
 	}
 	
-	func repairAssets(imageManager: ImageManager) async {
-		imageManager.clear()
+	func repairAssets(imageManager: ImageManager = .shared) async {
+		await imageManager.clear()
 		error = nil
 		assets = nil
 		storage.assets = nil

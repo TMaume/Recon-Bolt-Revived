@@ -9,7 +9,6 @@ struct SessionRecapView: View {
 	@LocalData var identity: Player.Identity?
 	
 	@Environment(\.assets) private var assets
-	@EnvironmentObject private var imageManager: ImageManager
 	
 	@State private var sessions: [PlaySession]
 	@State private var isBuildingSessions: Bool
@@ -548,7 +547,7 @@ private struct SessionRecapShareSheet: View {
 	
 	@Environment(\.assets) private var assets
 	@Environment(\.dismiss) private var dismiss
-	@EnvironmentObject private var imageManager: ImageManager
+	@Environment(\.imageManager) private var imageManager
 	
 	@State private var renderedImage: UIImage?
 	@State private var isRendering = false
@@ -604,20 +603,10 @@ private struct SessionRecapShareSheet: View {
 	private func renderSnapshot() async {
 		isRendering = true
 		if let cardID, let cardAsset = assets?.playerCards[cardID]?.smallArt {
-			if let cached = cardAsset.load() {
-				preloadedCard = cached
-			} else {
-				_ = try? await cardAsset.ensureDownloaded()
-				preloadedCard = cardAsset.load()
-			}
+			preloadedCard = await imageManager.awaitImage(for: cardAsset, bucket: .icon)
 		}
 		if let aid = session.topAgentID, let agentAsset = assets?.agents[aid]?.displayIcon {
-			if let cached = agentAsset.load() {
-				preloadedAgent = cached
-			} else {
-				_ = try? await agentAsset.ensureDownloaded()
-				preloadedAgent = agentAsset.load()
-			}
+			preloadedAgent = await imageManager.awaitImage(for: agentAsset, bucket: .icon)
 		}
 		
 		let renderer = ImageRenderer(
@@ -630,7 +619,7 @@ private struct SessionRecapShareSheet: View {
 				preloadedAgentImage: preloadedAgent
 			)
 			.environment(\.assets, assets)
-			.environmentObject(imageManager)
+			.environment(\.imageManager, imageManager)
 			.frame(width: 375)
 			.padding(16)
 			.background(Color.groupedBackground)
