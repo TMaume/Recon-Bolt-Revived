@@ -17,17 +17,15 @@ struct MatchListView: View {
 	@State private var matchCacheTick = 0
 	@State private var cachedDetailsSnapshot: [MatchDetails] = []
 	@State private var computedMastery: [AgentMasterySummary] = []
-	@State private var computedAccolades = AccoladesReport(
-		totalEarned: 0,
-		earnedTypesCount: 0,
-		totalTypesCount: AccoladeType.allCases.count,
-		scannedMatchesCount: 0,
-		allItems: [],
-		earnedItems: []
-	)
 	@State private var computedLatestSession: SessionRecapBuilder.LatestSessionPreview? = nil
 	@State private var computedGoalTrajectory: SeasonGoalTrajectory? = nil
+	@ObservedObject private var accoladesCache = AccoladesCacheStore.shared
 	@ObservedObject private var filterStore = MatchListFilterStore.shared
+	
+	private struct AccoladesSyncKey: Equatable {
+		var userID: User.ID
+		var matchIDs: [Match.ID]
+	}
 	
 	@Environment(\.valorantLoad) private var load
 	@Environment(\.shouldAnonymize) private var shouldAnonymize
@@ -93,7 +91,11 @@ struct MatchListView: View {
 					
 					AgentMasterySummaryBox(summaries: computedMastery, actEndDate: currentAct?.timeSpan.end)
 					
-					AccoladesSummaryBox(userID: userID, matches: cachedDetailsSnapshot, report: computedAccolades)
+					AccoladesSummaryBox(
+						userID: userID,
+						knownMatchIDs: shownMatches.map(\.id),
+						report: accoladesCache.report(for: userID, act: currentAct, seasons: seasons)
+					)
 					
 					if let activeGoal, let trajectory = computedGoalTrajectory {
 						SeasonGoalProgressModule(goal: activeGoal, trajectory: trajectory, currentAct: currentAct)
@@ -269,6 +271,10 @@ struct MatchListView: View {
 				.debounce(for: .milliseconds(250), scheduler: RunLoop.main)
 		) { _ in
 			matchCacheTick += 1
+			accoladesCache.ingestLoadedMatches(
+				for: userID,
+				matchIDs: shownMatches.prefix(40).map(\.id)
+			)
 		}
 		.task(id: computeKey) {
 			let manager = LocalDataProvider.shared.matchDetailsManager
@@ -298,12 +304,6 @@ struct MatchListView: View {
 						currentAct: currentActSnapshot,
 						previousAct: prevActSnapshot
 					)
-					let accolades = AccoladesCalculator.compute(
-						userID: uid,
-						matches: details,
-						act: currentActSnapshot,
-						seasons: seasonsSnapshot
-					)
 					let latestSession = SessionRecapBuilder.latestSessionPreview(
 						matches: allUpdates,
 						detailsByID: detailsMap
@@ -317,16 +317,18 @@ struct MatchListView: View {
 							seasons: seasonsSnapshot
 						)
 					}
-					return (mastery, accolades, latestSession, trajectory)
+					return (mastery, latestSession, trajectory)
 				}
 			}.value
 			
 			guard !Task.isCancelled else { return }
 			cachedDetailsSnapshot = details
 			computedMastery = computed.0
-			computedAccolades = computed.1
-			computedLatestSession = computed.2
-			computedGoalTrajectory = computed.3
+			computedLatestSession = computed.1
+			computedGoalTrajectory = computed.2
+		}
+		.task(id: AccoladesSyncKey(userID: userID, matchIDs: shownMatches.map(\.id))) {
+			await accoladesCache.syncMissingMatches(for: userID, matchIDs: shownMatches.map(\.id))
 		}
 		.onAppear {
 			cacheLoadedIdentityToSocial()

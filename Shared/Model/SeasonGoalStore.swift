@@ -134,6 +134,42 @@ final class SeasonGoalStore: ObservableObject {
 		persist()
 	}
 	
+	func exportGoals(for playerIDs: Set<User.ID>?) -> [SeasonGoal] {
+		guard let playerIDs else { return goals }
+		return goals.filter { goal in
+			guard let accountID = goal.accountID else { return !playerIDs.isEmpty }
+			return playerIDs.contains(accountID)
+		}
+	}
+	
+	@discardableResult
+	func importGoals(_ incoming: [SeasonGoal], replaceAll: Bool) async -> Int {
+		var working = replaceAll ? [] : goals
+		var changedCount = 0
+		
+		for goal in incoming {
+			if let idx = working.firstIndex(where: { $0.id == goal.id }) {
+				if goal.createdAt > working[idx].createdAt {
+					working[idx] = goal
+					changedCount += 1
+				}
+			} else if let idx = working.firstIndex(where: { $0.accountID == goal.accountID && $0.actID == goal.actID }) {
+				if goal.createdAt > working[idx].createdAt {
+					working[idx] = goal
+					changedCount += 1
+				}
+			} else {
+				working.append(goal)
+				changedCount += 1
+			}
+		}
+		
+		working.sort { $0.createdAt > $1.createdAt }
+		goals = working
+		await LocalJSONStore.saveAndWait(goals, to: filename)
+		return replaceAll ? working.count : changedCount
+	}
+	
 	private func persist() {
 		LocalJSONStore.save(goals, to: filename)
 	}

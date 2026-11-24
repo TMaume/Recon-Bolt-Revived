@@ -153,6 +153,28 @@ final class LineupsManager: ObservableObject {
 		LocalJSONStore.save(favorites, to: favoritesFilename)
 	}
 	
+	@discardableResult
+	func importFavorites(_ incoming: [LineupGuide], replaceAll: Bool) async -> Int {
+		var working = replaceAll ? [] : favorites
+		var changedCount = 0
+		
+		for guide in incoming {
+			if let idx = working.firstIndex(where: { $0.id == guide.id }) {
+				if working[idx] != guide {
+					working[idx] = guide
+					changedCount += 1
+				}
+			} else {
+				working.append(guide)
+				changedCount += 1
+			}
+		}
+		
+		favorites = working
+		await LocalJSONStore.saveAndWait(favorites, to: favoritesFilename)
+		return replaceAll ? working.count : changedCount
+	}
+	
 	func sortGuides(by sort: LineupSort) {
 		guides = sorted(guides, by: sort)
 	}

@@ -183,6 +183,112 @@ final class LocalDataManager<Object: Identifiable & Codable> where Object.ID: Lo
 		await cachedEntries(for: Set(ids)).map(\.object)
 	}
 	
+	/// Loads objects directly from disk without populating or evicting the in-memory LRU cache.
+	func loadFromDiskOnly(for ids: some Sequence<Object.ID>) async -> [Object] {
+		let uniqueIDs = Set(ids)
+		guard !uniqueIDs.isEmpty else { return [] }
+		return await storage.tryLoadEntries(with: uniqueIDs).map(\.object)
+	}
+	
+	func allCachedIDs() async -> [Object.ID] {
+		var ids = Set(await storage.allStoredIDs())
+		for (id, entry) in cache where entry != nil {
+			ids.insert(id)
+		}
+		return Array(ids)
+	}
+	
+	func diskSizesByID() async -> [Object.ID: Int64] {
+		await storage.fileSizesByID()
+	}
+	
+	/// Loads `Entry` values for backup export without altering the in-memory LRU cache.
+	/// Prefers non-nil in-memory entries so freshly stored objects whose async write may still be pending are included.
+	func loadEntriesFromDiskOnly(for ids: some Sequence<Object.ID>) async -> [Entry] {
+		let uniqueIDs = Set(ids)
+		guard !uniqueIDs.isEmpty else { return [] }
+		var entries: [Entry] = []
+		var remaining: [Object.ID] = []
+		for id in uniqueIDs {
+			if let cached = cache[id] ?? nil {
+				entries.append(cached)
+			} else {
+				remaining.append(id)
+			}
+		}
+		if !remaining.isEmpty {
+			entries.append(contentsOf: await storage.tryLoadEntries(with: remaining))
+		}
+		return entries
+	}
+	
+	@discardableResult
+	func importEntries(_ entries: [Entry], replaceAll: Bool) async throws -> Int {
+		var deduplicated: [Object.ID: Entry] = [:]
+		for entry in entries {
+			if let existing = deduplicated[entry.id], existing.lastUpdate >= entry.lastUpdate {
+				continue
+			}
+			deduplicated[entry.id] = entry
+		}
+		
+		if replaceAll {
+			try await clearOut()
+		}
+		
+		let toSave: [Entry]
+		if replaceAll {
+			toSave = Array(deduplicated.values)
+		} else {
+			let incomingIDs = Array(deduplicated.keys)
+			let existingByID = await existingEntriesByID(for: incomingIDs)
+			toSave = deduplicated.values.filter { incoming in
+				guard let existing = existingByID[incoming.id] else { return true }
+				return incoming.lastUpdate > existing.lastUpdate
+			}
+		}
+		
+		return try await persistImportedEntries(toSave, forceChangeNotification: replaceAll)
+	}
+	
+	func existingEntriesByID(for ids: [Object.ID]) async -> [Object.ID: Entry] {
+		var result: [Object.ID: Entry] = [:]
+		var missingIDs: [Object.ID] = []
+		for id in ids {
+			if let cached = cache[id] ?? nil {
+				result[id] = cached
+			} else {
+				missingIDs.append(id)
+			}
+		}
+		if !missingIDs.isEmpty {
+			for entry in await storage.tryLoadEntries(with: missingIDs) {
+				result[entry.id] = entry
+			}
+		}
+		return result
+	}
+	
+	func persistImportedEntries(_ toSave: [Entry], forceChangeNotification: Bool = false) async throws -> Int {
+		if !toSave.isEmpty {
+			try await storage.saveEntries(toSave)
+		}
+		for entry in toSave {
+			if maxInMemoryEntries == nil || (cache[entry.id] ?? nil) != nil {
+				cache[entry.id] = entry
+				recordAccess(for: entry.id)
+			} else {
+				cache.removeValue(forKey: entry.id)
+			}
+			subjects[entry.id]?.send(entry.object)
+		}
+		evictIfNeeded()
+		if !toSave.isEmpty || forceChangeNotification {
+			changePublisher.send()
+		}
+		return toSave.count
+	}
+	
 	nonisolated func objectPublisher(for id: Object.ID) -> LocalDataPublisher<Object> {
 		Future { promise in
 			Task {
@@ -317,6 +423,42 @@ final class LocalDataManager<Object: Identifiable & Codable> where Object.ID: Lo
 			let raw = try encoder.encode(entry)
 			let url = fileURL(for: entry.id)
 			try raw.write(to: url, options: .atomic)
+		}
+		
+		func saveEntries(_ entries: [Entry]) throws {
+			try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+			for entry in entries {
+				try save(entry)
+			}
+		}
+		
+		func allStoredIDs() -> [Object.ID] {
+			guard let files = try? FileManager.default.contentsOfDirectory(
+				at: folderURL,
+				includingPropertiesForKeys: []
+			) else {
+				return []
+			}
+			return files.compactMap { file in
+				guard file.pathExtension.lowercased() == "json" else { return nil }
+				return Object.ID(file.deletingPathExtension().lastPathComponent)
+			}
+		}
+		
+		func fileSizesByID() -> [Object.ID: Int64] {
+			guard let files = try? FileManager.default.contentsOfDirectory(
+				at: folderURL,
+				includingPropertiesForKeys: [.fileSizeKey]
+			) else {
+				return [:]
+			}
+			var sizes: [Object.ID: Int64] = [:]
+			for file in files where file.pathExtension.lowercased() == "json" {
+				guard let id = Object.ID(file.deletingPathExtension().lastPathComponent) else { continue }
+				let values = try? file.resourceValues(forKeys: [.fileSizeKey])
+				sizes[id, default: 0] += Int64(values?.fileSize ?? 0)
+			}
+			return sizes
 		}
 	}
 }

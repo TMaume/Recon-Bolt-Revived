@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct StorageView: View {
 	@ObservedObject var accountManager: AccountManager
@@ -7,15 +8,31 @@ struct StorageView: View {
 	
 	@EnvironmentObject private var bookmarkList: BookmarkList
 	@EnvironmentObject private var presetManager: LoadoutPresetManager
+	@EnvironmentObject private var wishlistManager: WishlistManager
+	@EnvironmentObject private var shopHistoryStore: ShopHistoryStore
+	@EnvironmentObject private var usernameHistoryStore: UsernameHistoryStore
+	@EnvironmentObject private var playerSettingsSnapshotStore: PlayerSettingsSnapshotStore
+	@EnvironmentObject private var seasonGoalStore: SeasonGoalStore
+	@EnvironmentObject private var socialManager: SocialManager
+	@EnvironmentObject private var lineupsManager: LineupsManager
 	@StateObject private var storageManager = StorageManager()
 	
 	@State private var breakdown = StorageBreakdown()
 	@State private var isLoaded = false
 	
+	@State private var isShowingImportPicker = false
+	@State private var pickedImportFile: ImportedBackupFile?
+	@State private var importPickerError: String?
+	
 	@State private var confirmRemoveAccounts = false
 	@State private var confirmDeleteBookmarks = false
 	@State private var confirmDeletePresets = false
 	@State private var confirmResetSettings = false
+	
+	private struct ImportedBackupFile: Identifiable {
+		let id = UUID()
+		let url: URL
+	}
 	
 	var body: some View {
 		ScrollView {
@@ -119,6 +136,62 @@ struct StorageView: View {
 				}
 				
 				VStack(alignment: .leading, spacing: 8) {
+					SettingsSectionHeader("Backup & Transfer")
+					
+					SettingsCard {
+						NavigationLink {
+							BackupExportView(stores: makeBackupStores())
+						} label: {
+							HStack(spacing: 14) {
+								Image(systemName: "square.and.arrow.up")
+									.font(.system(size: 18))
+									.foregroundStyle(.tint)
+									.frame(width: 24)
+								
+								Text("Export Cached Data")
+									.font(.body)
+									.foregroundStyle(.primary)
+								
+								Spacer()
+								
+								Image(systemName: "chevron.right")
+									.font(.caption.weight(.semibold))
+									.foregroundStyle(.secondary)
+							}
+							.padding(.horizontal, 16)
+							.padding(.vertical, 14)
+							.contentShape(Rectangle())
+						}
+						.buttonStyle(.plain)
+						
+						SettingsRowDivider()
+						
+						Button {
+							isShowingImportPicker = true
+						} label: {
+							HStack(spacing: 14) {
+								Image(systemName: "square.and.arrow.down")
+									.font(.system(size: 18))
+									.foregroundStyle(.tint)
+									.frame(width: 24)
+								
+								Text("Import Backup (.rbbackup)")
+									.font(.body)
+									.foregroundStyle(.primary)
+								
+								Spacer()
+							}
+							.padding(.horizontal, 16)
+							.padding(.vertical, 14)
+							.contentShape(Rectangle())
+						}
+						.buttonStyle(.plain)
+					}
+					
+					SettingsFooter("Export cached matches, profiles, and personal data to a tamper-checked .rbbackup archive before reinstalling or switching builds. Riot login tokens are never exported.")
+				}
+				
+				VStack(alignment: .leading, spacing: 8) {
 					SettingsSectionHeader("Your Data")
 					
 					SettingsCard {
@@ -217,6 +290,50 @@ struct StorageView: View {
 		} message: {
 			Text("Restores all interface, sign-in, accent color, and auto-delete preferences to their defaults.")
 		}
+		.fileImporter(
+			isPresented: $isShowingImportPicker,
+			allowedContentTypes: [.reconBoltBackup, .data]
+		) { result in
+			switch result {
+			case .success(let url):
+				pickedImportFile = ImportedBackupFile(url: url)
+			case .failure(let error):
+				importPickerError = error.localizedDescription
+			}
+		}
+		.sheet(item: $pickedImportFile) { item in
+			NavigationStack {
+				BackupImportView(stores: makeBackupStores(), initialURL: item.url) {
+					Task { await reloadBreakdown() }
+				}
+			}
+		}
+		.alert("Could Not Open File", isPresented: Binding(
+			get: { importPickerError != nil },
+			set: { if !$0 { importPickerError = nil } }
+		)) {
+			Button("OK", role: .cancel) {}
+		} message: {
+			if let importPickerError {
+				Text(importPickerError)
+			}
+		}
+	}
+	
+	private func makeBackupStores() -> BackupStores {
+		BackupStores(
+			accountManager: accountManager,
+			bookmarkList: bookmarkList,
+			settings: settings,
+			loadoutPresetManager: presetManager,
+			wishlistManager: wishlistManager,
+			shopHistoryStore: shopHistoryStore,
+			usernameHistoryStore: usernameHistoryStore,
+			playerSettingsSnapshotStore: playerSettingsSnapshotStore,
+			seasonGoalStore: seasonGoalStore,
+			socialManager: socialManager,
+			lineupsManager: lineupsManager
+		)
 	}
 	
 	private var summaryCard: some View {

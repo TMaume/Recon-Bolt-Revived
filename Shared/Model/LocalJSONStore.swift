@@ -45,16 +45,31 @@ enum LocalJSONStore {
 		let fileURL = url(for: filename)
 		let boxed = UncheckedBox(value: value)
 		ioQueue.async {
-			do {
-				try FileManager.default.createDirectory(
-					at: fileURL.deletingLastPathComponent(),
-					withIntermediateDirectories: true
-				)
-				let data = try makeEncoder().encode(boxed.value)
-				try data.write(to: fileURL, options: .atomic)
-			} catch {
-				print("Failed saving \(filename):", error)
+			writeOnQueue(boxed.value, to: fileURL, filename: filename)
+		}
+	}
+	
+	static func saveAndWait<T: Encodable>(_ value: T, to filename: String) async {
+		let fileURL = url(for: filename)
+		let boxed = UncheckedBox(value: value)
+		await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+			ioQueue.async {
+				writeOnQueue(boxed.value, to: fileURL, filename: filename)
+				continuation.resume()
 			}
+		}
+	}
+	
+	private static func writeOnQueue<T: Encodable>(_ value: T, to fileURL: URL, filename: String) {
+		do {
+			try FileManager.default.createDirectory(
+				at: fileURL.deletingLastPathComponent(),
+				withIntermediateDirectories: true
+			)
+			let data = try makeEncoder().encode(value)
+			try data.write(to: fileURL, options: .atomic)
+		} catch {
+			print("Failed saving \(filename):", error)
 		}
 	}
 	

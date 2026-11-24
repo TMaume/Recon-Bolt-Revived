@@ -158,6 +158,59 @@ final class UsernameHistoryStore: ObservableObject {
 		}
 	}
 	
+	func exportRecords(for playerIDs: Set<User.ID>?) async -> [User.ID: [NameHistoryRecord]] {
+		if let loadTask = initialLoadTask, !hasLoadedFromDisk {
+			await loadTask.value
+		}
+		guard let playerIDs else { return recordsByPlayer }
+		return recordsByPlayer.filter { playerIDs.contains($0.key) }
+	}
+	
+	@discardableResult
+	func importRecords(_ incoming: [User.ID: [NameHistoryRecord]], replaceAll: Bool) async -> Int {
+		debouncedSaveTask?.cancel()
+		if let loadTask = initialLoadTask, !hasLoadedFromDisk {
+			await loadTask.value
+		}
+		
+		var working = replaceAll ? [:] : recordsByPlayer
+		var changedCount = 0
+		
+		for (userID, incomingList) in incoming {
+			var list = working[userID] ?? []
+			var userChanged = false
+			for entry in incomingList {
+				let cleanName = entry.gameName.trimmingCharacters(in: .whitespacesAndNewlines)
+				let cleanTag = entry.tagLine.trimmingCharacters(in: .whitespacesAndNewlines)
+				guard !cleanName.isEmpty else { continue }
+				if let idx = list.firstIndex(where: { $0.gameName == cleanName && $0.tagLine == cleanTag }) {
+					let mergedFirst = min(list[idx].firstSeen, entry.firstSeen)
+					let mergedLast = max(list[idx].lastSeen, entry.lastSeen)
+					if mergedFirst != list[idx].firstSeen || mergedLast != list[idx].lastSeen {
+						list[idx].firstSeen = mergedFirst
+						list[idx].lastSeen = mergedLast
+						userChanged = true
+					}
+				} else {
+					var sanitized = entry
+					sanitized.gameName = cleanName
+					sanitized.tagLine = cleanTag
+					list.append(sanitized)
+					userChanged = true
+				}
+			}
+			list.sort { $0.firstSeen < $1.firstSeen }
+			if replaceAll || userChanged {
+				working[userID] = list
+				changedCount += 1
+			}
+		}
+		
+		recordsByPlayer = working
+		await LocalJSONStore.saveAndWait(recordsByPlayer, to: filename)
+		return replaceAll ? working.count : changedCount
+	}
+	
 	private func schedulePersist() {
 		debouncedSaveTask?.cancel()
 		debouncedSaveTask = Task { @MainActor [weak self] in

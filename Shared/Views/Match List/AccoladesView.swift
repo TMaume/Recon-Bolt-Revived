@@ -3,9 +3,10 @@ import ValorantAPI
 
 struct AccoladesSummaryBox: View {
 	var userID: User.ID
-	var matches: [MatchDetails]
+	var knownMatchIDs: [Match.ID] = []
 	var report: AccoladesReport
 	
+	@ObservedObject private var accoladesCache = AccoladesCacheStore.shared
 	@State private var isExpanded = false
 	
 	var body: some View {
@@ -31,7 +32,7 @@ struct AccoladesSummaryBox: View {
 				Spacer()
 				
 				NavigationLink {
-					AccoladesView(userID: userID, matches: matches)
+					AccoladesView(userID: userID, knownMatchIDs: knownMatchIDs)
 				} label: {
 					Image(systemName: "chevron.right")
 						.font(.caption.weight(.semibold))
@@ -77,7 +78,7 @@ struct AccoladesSummaryBox: View {
 			AccoladeDetailView(
 				userID: userID,
 				item: item,
-				totalCachedMatches: matches.count
+				totalCachedMatches: accoladesCache.cachedMatchCount(for: userID)
 			)
 		} label: {
 			VStack(spacing: 6) {
@@ -111,21 +112,22 @@ struct AccoladesView: View {
 	}
 	
 	var userID: User.ID
-	var matches: [MatchDetails]
+	var knownMatchIDs: [Match.ID] = []
 	
 	@Environment(\.seasons) private var seasons
 	@Environment(\.assets) private var assets
+	@ObservedObject private var accoladesCache = AccoladesCacheStore.shared
 	@State private var scope: Scope = .thisAct
 	
 	private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
 	
 	var body: some View {
-		let report = AccoladesCalculator.compute(
-			userID: userID,
-			matches: matches,
+		let report = accoladesCache.report(
+			for: userID,
 			act: scope == .thisAct ? seasons?.currentAct() : nil,
 			seasons: seasons
 		)
+		let cachedCount = accoladesCache.cachedMatchCount(for: userID)
 		
 		ScrollView {
 			VStack(spacing: 14) {
@@ -153,7 +155,7 @@ struct AccoladesView: View {
 							AccoladeDetailView(
 								userID: userID,
 								item: item,
-								totalCachedMatches: matches.count
+								totalCachedMatches: cachedCount
 							)
 						} label: {
 							accoladeGridCard(item)
@@ -172,6 +174,9 @@ struct AccoladesView: View {
 		.background(Color.groupedBackground)
 		.navigationTitle("Accolades")
 		.navigationBarTitleDisplayMode(.inline)
+		.task(id: knownMatchIDs) {
+			await accoladesCache.syncMissingMatches(for: userID, matchIDs: knownMatchIDs)
+		}
 	}
 	
 	private func accoladeGridCard(_ item: AccoladeSummary) -> some View {

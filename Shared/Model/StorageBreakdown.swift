@@ -161,6 +161,7 @@ enum MatchRetentionManager {
 		guard !candidateIDs.isEmpty else { return 0 }
 		do {
 			try await detailsManager.clearOut(idFilter: candidateIDs)
+			AccoladesCacheStore.shared.remove(matchIDs: candidateIDs)
 			return candidateIDs.count
 		} catch {
 			return 0
@@ -180,10 +181,12 @@ enum MatchRetentionManager {
 		let usage = try await detailsManager.diskUsage(for: linkedIDs)
 		guard !usage.unknownIDs.isEmpty else { return 0 }
 		try await detailsManager.clearOut(idFilter: usage.unknownIDs)
+		AccoladesCacheStore.shared.remove(matchIDs: usage.unknownIDs)
 		return usage.unknownIDs.count
 	}
 	
 	static func deleteAllMatches() async throws {
 		try await LocalDataProvider.shared.matchDetailsManager.clearOut()
+		AccoladesCacheStore.shared.clearAll()
 	}
 }

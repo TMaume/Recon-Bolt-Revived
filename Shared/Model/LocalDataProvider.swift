@@ -84,6 +84,7 @@ final class LocalDataProvider {
 	static func dataFetched(_ details: MatchDetails) {
 		shared.store(details.players.map(\.identity), asOf: details.matchInfo.gameStart)
 		UsernameHistoryStore.record(players: details.players)
+		AccoladesCacheStore.recordIfTracked(details)
 	}
 	
 	static func dataFetched(_ info: LivePregameInfo) {
@@ -133,6 +134,78 @@ extension LocalDataManager where Object == MatchDetails {
 			}
 		}
 		return unloaded
+	}
+}
+
+extension LocalDataManager where Object == MatchList {
+	@discardableResult
+	func importMatchLists(_ entries: [Entry], replaceAll: Bool) async throws -> Int {
+		var byUser: [User.ID: Entry] = [:]
+		for incoming in entries {
+			if let existing = byUser[incoming.id] {
+				byUser[incoming.id] = Self.mergeMatchListEntries(existing, incoming)
+			} else {
+				byUser[incoming.id] = Self.normalizeMatchListEntry(incoming)
+			}
+		}
+		
+		if replaceAll {
+			try await clearOut()
+			return try await persistImportedEntries(Array(byUser.values), forceChangeNotification: true)
+		}
+		
+		let existingByID = await existingEntriesByID(for: Array(byUser.keys))
+		var toSave: [Entry] = []
+		for (userID, incoming) in byUser {
+			if let existing = existingByID[userID] {
+				let merged = Self.mergeMatchListEntries(existing, incoming)
+				let existingIDs = Set(existing.object.matches.map(\.id))
+				let mergedIDs = Set(merged.object.matches.map(\.id))
+				if mergedIDs != existingIDs
+					|| merged.object.matches.count != existing.object.matches.count
+					|| merged.object.highestLoadedIndex != existing.object.highestLoadedIndex
+					|| merged.lastUpdate > existing.lastUpdate {
+					toSave.append(merged)
+				}
+			} else {
+				toSave.append(incoming)
+			}
+		}
+		
+		return try await persistImportedEntries(toSave, forceChangeNotification: false)
+	}
+	
+	private static func normalizeMatchListEntry(_ entry: Entry) -> Entry {
+		var byMatchID: [Match.ID: CompetitiveUpdate] = [:]
+		for match in entry.object.matches {
+			if byMatchID[match.id] == nil {
+				byMatchID[match.id] = match
+			}
+		}
+		let sorted = byMatchID.values.sorted { $0.startTime > $1.startTime }
+		var copy = entry
+		copy.object.matches = sorted
+		return copy
+	}
+	
+	private static func mergeMatchListEntries(_ lhs: Entry, _ rhs: Entry) -> Entry {
+		let older = lhs.lastUpdate <= rhs.lastUpdate ? lhs : rhs
+		let newer = lhs.lastUpdate <= rhs.lastUpdate ? rhs : lhs
+		
+		var byMatchID: [Match.ID: CompetitiveUpdate] = [:]
+		for match in older.object.matches {
+			byMatchID[match.id] = match
+		}
+		for match in newer.object.matches {
+			byMatchID[match.id] = match
+		}
+		let sorted = byMatchID.values.sorted { $0.startTime > $1.startTime }
+		let mergedList = MatchList(
+			userID: newer.object.userID,
+			matches: sorted,
+			highestLoadedIndex: max(older.object.highestLoadedIndex, newer.object.highestLoadedIndex)
+		)
+		return Entry(lastUpdate: max(older.lastUpdate, newer.lastUpdate), object: mergedList)
 	}
 }
 

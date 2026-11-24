@@ -2,7 +2,7 @@ import SwiftUI
 import ValorantAPI
 
 /// The 12 match accolades tracked across Cached Match Details.
-enum AccoladeType: String, CaseIterable, Identifiable {
+enum AccoladeType: String, CaseIterable, Identifiable, Codable, Hashable {
 	case mvp
 	case topFrag
 	case masterful
@@ -122,11 +122,24 @@ struct AccoladeSummary: Identifiable {
 	var byAct: [AccoladeActBreakdown]
 }
 
-struct AccoladeMatchItem: Identifiable, Hashable {
+struct AccoladeMatchItem: Identifiable, Hashable, Codable {
 	var id: AccoladeType { type }
 	var type: AccoladeType
 	var value: Int
 	var isNewBest: Bool = false
+	
+	enum CodingKeys: String, CodingKey {
+		case type, value
+	}
+}
+
+struct CachedMatchAccolades: Codable, Hashable, Identifiable {
+	var id: Match.ID { matchID }
+	var matchID: Match.ID
+	var mapID: MapID
+	var seasonID: Season.ID
+	var gameStart: Date
+	var items: [AccoladeMatchItem]
 }
 
 struct AccoladeMatchGroup: Identifiable, Hashable {
@@ -159,13 +172,36 @@ private struct RawMatchAccoladeHit {
 }
 
 enum AccoladesCalculator {
-	static func compute(
+	static func extractCachedEntry(
 		userID: User.ID,
-		matches: [MatchDetails],
+		match: MatchDetails
+	) -> CachedMatchAccolades {
+		CachedMatchAccolades(
+			matchID: match.id,
+			mapID: match.matchInfo.mapID,
+			seasonID: match.matchInfo.seasonID,
+			gameStart: match.matchInfo.gameStart,
+			items: accolades(for: userID, in: match)
+		)
+	}
+	
+	static func buildReport(
+		from entries: [CachedMatchAccolades],
 		act: Act?,
 		seasons: SeasonCollection.Accessor? = nil
 	) -> AccoladesReport {
-		let allHits = collectHits(userID: userID, matches: matches)
+		var allHits: [AccoladeType: [RawMatchAccoladeHit]] = [:]
+		for entry in entries {
+			for item in entry.items {
+				allHits[item.type, default: []].append(RawMatchAccoladeHit(
+					matchID: entry.matchID,
+					mapID: entry.mapID,
+					seasonID: entry.seasonID,
+					gameStart: entry.gameStart,
+					value: item.value
+				))
+			}
+		}
 		
 		let thisActID = act?.id
 		let thisActTimeSpan = act?.timeSpan
@@ -175,17 +211,17 @@ enum AccoladesCalculator {
 			return false
 		}
 		
-		let scopedMatches: [MatchDetails] = {
-			let filtered: [MatchDetails]
+		let scopedEntries: [CachedMatchAccolades] = {
+			let filtered: [CachedMatchAccolades]
 			if act != nil {
-				filtered = matches.filter { m in
-					(thisActID != nil && m.matchInfo.seasonID == thisActID)
-						|| (thisActTimeSpan?.contains(m.matchInfo.gameStart) == true)
+				filtered = entries.filter { e in
+					(thisActID != nil && e.seasonID == thisActID)
+						|| (thisActTimeSpan?.contains(e.gameStart) == true)
 				}
 			} else {
-				filtered = matches
+				filtered = entries
 			}
-			return filtered.sorted { $0.matchInfo.gameStart > $1.matchInfo.gameStart }
+			return filtered.sorted { $0.gameStart > $1.gameStart }
 		}()
 		
 		let allSummaries = AccoladeType.allCases.map { type -> AccoladeSummary in
@@ -223,17 +259,17 @@ enum AccoladesCalculator {
 			}
 		}
 		
-		let recentMatches = scopedMatches.prefix(20).map { match in
-			let matchMap = recordsByMatch[match.id] ?? [:]
+		let recentMatches = scopedEntries.prefix(20).map { entry in
+			let matchMap = recordsByMatch[entry.matchID] ?? [:]
 			let items = AccoladeType.allCases.compactMap { type -> AccoladeMatchItem? in
 				guard let record = matchMap[type] else { return nil }
 				return AccoladeMatchItem(type: type, value: record.value, isNewBest: record.isNewBest)
 			}
 			return AccoladeMatchGroup(
-				matchID: match.id,
-				mapID: match.matchInfo.mapID,
-				seasonID: match.matchInfo.seasonID,
-				gameStart: match.matchInfo.gameStart,
+				matchID: entry.matchID,
+				mapID: entry.mapID,
+				seasonID: entry.seasonID,
+				gameStart: entry.gameStart,
 				accolades: items
 			)
 		}
@@ -249,11 +285,21 @@ enum AccoladesCalculator {
 			totalEarned: allSummaries.reduce(0) { $0 + $1.count },
 			earnedTypesCount: earned.count,
 			totalTypesCount: AccoladeType.allCases.count,
-			scannedMatchesCount: scopedMatches.count,
+			scannedMatchesCount: scopedEntries.count,
 			allItems: allSummaries,
 			earnedItems: earned,
 			recentMatches: recentMatches
 		)
+	}
+	
+	static func compute(
+		userID: User.ID,
+		matches: [MatchDetails],
+		act: Act?,
+		seasons: SeasonCollection.Accessor? = nil
+	) -> AccoladesReport {
+		let entries = matches.map { extractCachedEntry(userID: userID, match: $0) }
+		return buildReport(from: entries, act: act, seasons: seasons)
 	}
 	
 	private static func buildRecords(from raw: [RawMatchAccoladeHit]) -> [AccoladeMatchRecord] {
@@ -462,25 +508,6 @@ enum AccoladesCalculator {
 		return AccoladeType.allCases.compactMap { type in
 			earned[type].map { AccoladeMatchItem(type: type, value: $0) }
 		}
-	}
-	
-	private static func collectHits(
-		userID: User.ID,
-		matches: [MatchDetails]
-	) -> [AccoladeType: [RawMatchAccoladeHit]] {
-		var result: [AccoladeType: [RawMatchAccoladeHit]] = [:]
-		for match in matches {
-			for item in accolades(for: userID, in: match) {
-				result[item.type, default: []].append(RawMatchAccoladeHit(
-					matchID: match.id,
-					mapID: match.matchInfo.mapID,
-					seasonID: match.matchInfo.seasonID,
-					gameStart: match.matchInfo.gameStart,
-					value: item.value
-				))
-			}
-		}
-		return result
 	}
 }
 

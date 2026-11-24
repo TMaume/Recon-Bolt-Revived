@@ -70,6 +70,34 @@ final class ShopHistoryStore: ObservableObject {
 		}
 	}
 	
+	func exportDays(for playerIDs: Set<User.ID>?) -> [ShopHistoryDay] {
+		guard let playerIDs else { return days }
+		return days.filter { playerIDs.contains($0.accountID) }
+	}
+	
+	@discardableResult
+	func importDays(_ incoming: [ShopHistoryDay], replaceAll: Bool) async -> Int {
+		var working = replaceAll ? [] : days
+		var changedCount = 0
+		
+		for day in incoming {
+			if let idx = working.firstIndex(where: { $0.accountID == day.accountID && $0.id == day.id }) {
+				if day.date > working[idx].date {
+					working[idx] = day
+					changedCount += 1
+				}
+			} else {
+				working.append(day)
+				changedCount += 1
+			}
+		}
+		
+		working.sort { $0.date > $1.date }
+		days = working
+		await LocalJSONStore.saveAndWait(days, to: filename)
+		return replaceAll ? working.count : changedCount
+	}
+	
 	private func persist() {
 		LocalJSONStore.save(days, to: filename)
 	}

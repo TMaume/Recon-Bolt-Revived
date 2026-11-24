@@ -216,6 +216,68 @@ final class AppSettings: ObservableObject {
 		reloadAppForAccentChange()
 	}
 	
+	struct BackupSnapshot: Codable, Equatable, Sendable {
+		var theme: Theme
+		var customAccentColorComponents: String
+		var autoOpenMatchDetails: Bool
+		var vibrateOnMatchFound: Bool
+		var isCompactListStyle: Bool
+		var autoDownloadMatches: Bool
+		var copyPlayerNames: Bool
+		var openProfileDirectly: Bool
+		var sortOfflineByLastSeen: Bool
+		var friendsSortOrder: FriendsSortOrder
+		var clearWebSignInDataOnOpen: Bool
+		var matchRetentionDays: Int
+		var keepsOwnMatches: Bool
+		var keepsBookmarkedMatches: Bool
+		var keepsUnlinkedMatches: Bool
+	}
+	
+	func exportSnapshot() -> BackupSnapshot {
+		BackupSnapshot(
+			theme: theme,
+			customAccentColorComponents: customAccentColorComponents,
+			autoOpenMatchDetails: autoOpenMatchDetails,
+			vibrateOnMatchFound: vibrateOnMatchFound,
+			isCompactListStyle: isCompactListStyle,
+			autoDownloadMatches: autoDownloadMatches,
+			copyPlayerNames: copyPlayerNames,
+			openProfileDirectly: openProfileDirectly,
+			sortOfflineByLastSeen: sortOfflineByLastSeen,
+			friendsSortOrder: friendsSortOrder,
+			clearWebSignInDataOnOpen: clearWebSignInDataOnOpen,
+			matchRetentionDays: matchRetentionDays,
+			keepsOwnMatches: keepsOwnMatches,
+			keepsBookmarkedMatches: keepsBookmarkedMatches,
+			keepsUnlinkedMatches: keepsUnlinkedMatches
+		)
+	}
+	
+	@MainActor
+	func applySnapshot(_ snapshot: BackupSnapshot) {
+		let accentChanged = customAccentColorComponents != snapshot.customAccentColorComponents
+		theme = snapshot.theme
+		customAccentColorComponents = snapshot.customAccentColorComponents
+		autoOpenMatchDetails = snapshot.autoOpenMatchDetails
+		vibrateOnMatchFound = snapshot.vibrateOnMatchFound
+		isCompactListStyle = snapshot.isCompactListStyle
+		autoDownloadMatches = snapshot.autoDownloadMatches
+		copyPlayerNames = snapshot.copyPlayerNames
+		openProfileDirectly = snapshot.openProfileDirectly
+		sortOfflineByLastSeen = snapshot.sortOfflineByLastSeen
+		friendsSortOrder = snapshot.friendsSortOrder
+		clearWebSignInDataOnOpen = snapshot.clearWebSignInDataOnOpen
+		matchRetentionDays = snapshot.matchRetentionDays
+		keepsOwnMatches = snapshot.keepsOwnMatches
+		keepsBookmarkedMatches = snapshot.keepsBookmarkedMatches
+		keepsUnlinkedMatches = snapshot.keepsUnlinkedMatches
+		objectWillChange.send()
+		if accentChanged {
+			reloadAppForAccentChange()
+		}
+	}
+	
 	enum FriendsSortOrder: String, Hashable, Codable, CaseIterable {
 		case defaultOrder
 		case alphabeticalAsc

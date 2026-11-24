@@ -25,6 +25,15 @@ struct FriendListChangeEvent: Identifiable, Codable, Equatable, Sendable {
 	}
 }
 
+struct SocialFriendsBackup: Codable {
+	var friendsByJID: [String: XMPPFriend] = [:]
+	var snapshotSubscriptions: [String: String] = [:]
+	var changeEvents: [FriendListChangeEvent] = []
+	var cachedCardByPUUID: [String: PlayerCard.ID] = [:]
+	var lastSyncedAt: Date?
+	var lastPresenceAt: Date?
+}
+
 @MainActor
 final class SocialOnlineCount: ObservableObject {
 	@Published var count: Int = 0
@@ -1114,5 +1123,232 @@ final class SocialManager: ObservableObject {
 			merged = Array(merged.suffix(Self.maxCachedMessagesPerConversation))
 		}
 		messagesByJID[peerJID] = merged
+	}
+	
+	// MARK: - Backup Export / Import
+	
+	private func currentAccountSnapshot() -> CachedSocialAccount {
+		let trimmedMessages = messagesByJID.mapValues { list in
+			Array(list.suffix(Self.maxCachedMessagesPerConversation))
+		}
+		return CachedSocialAccount(
+			friendsByJID: friendsByJID,
+			snapshotSubscriptions: snapshotSubscriptions,
+			changeEvents: changeEvents,
+			messagesByJID: trimmedMessages,
+			cachedCardByPUUID: cachedCardByPUUID,
+			lastSyncedAt: lastSyncedAt,
+			lastPresenceAt: lastPresenceAt
+		)
+	}
+	
+	private func flushCurrentAccountCacheIfNeeded() async {
+		deferredSaveTask?.cancel()
+		deferredSaveTask = nil
+		guard let userID = connectedUserID ?? loadedCacheUserID else { return }
+		let key = cacheKey(for: userID)
+		let snapshot = currentAccountSnapshot()
+		var allCaches = await ensureAllCachesLoaded()
+		allCaches[key] = snapshot
+		cachedAccountsByKey = allCaches
+		await LocalJSONStore.saveAndWait(allCaches, to: Self.cacheFilename)
+	}
+	
+	func exportSocialData(
+		for playerIDs: Set<User.ID>?
+	) async -> (friends: [String: SocialFriendsBackup], messages: [String: [String: [XMPPChatMessage]]]) {
+		await flushCurrentAccountCacheIfNeeded()
+		let allCaches = await ensureAllCachesLoaded()
+		let allowedKeys = playerIDs.map { Set($0.map { $0.description.lowercased() }) }
+		
+		var friendsBackup: [String: SocialFriendsBackup] = [:]
+		var messagesBackup: [String: [String: [XMPPChatMessage]]] = [:]
+		
+		for (rawKey, account) in allCaches {
+			let key = rawKey.lowercased()
+			if let allowedKeys, !allowedKeys.contains(key) { continue }
+			
+			if !account.friendsByJID.isEmpty
+				|| !account.changeEvents.isEmpty
+				|| !account.snapshotSubscriptions.isEmpty
+				|| !account.cachedCardByPUUID.isEmpty {
+				friendsBackup[key] = SocialFriendsBackup(
+					friendsByJID: account.friendsByJID,
+					snapshotSubscriptions: account.snapshotSubscriptions,
+					changeEvents: account.changeEvents,
+					cachedCardByPUUID: account.cachedCardByPUUID,
+					lastSyncedAt: account.lastSyncedAt,
+					lastPresenceAt: account.lastPresenceAt
+				)
+			}
+			
+			let nonEmptyConversations = account.messagesByJID.filter { !$0.value.isEmpty }
+			if !nonEmptyConversations.isEmpty {
+				messagesBackup[key] = nonEmptyConversations
+			}
+		}
+		
+		return (friendsBackup, messagesBackup)
+	}
+	
+	@discardableResult
+	func importSocialFriends(_ incoming: [String: SocialFriendsBackup], replaceAll: Bool) async -> Int {
+		await flushCurrentAccountCacheIfNeeded()
+		var allCaches = await ensureAllCachesLoaded()
+		
+		if replaceAll {
+			for key in Array(allCaches.keys) {
+				var account = allCaches[key]!
+				account.friendsByJID = [:]
+				account.snapshotSubscriptions = [:]
+				account.changeEvents = []
+				account.cachedCardByPUUID = [:]
+				account.lastSyncedAt = nil
+				account.lastPresenceAt = nil
+				if account.messagesByJID.isEmpty {
+					allCaches.removeValue(forKey: key)
+				} else {
+					allCaches[key] = account
+				}
+			}
+		}
+		
+		var changedAccounts = 0
+		for (rawKey, backup) in incoming {
+			let key = rawKey.lowercased()
+			var account = allCaches[key] ?? CachedSocialAccount()
+			var accountChanged = false
+			
+			for (jid, friend) in backup.friendsByJID {
+				if let existing = account.friendsByJID[jid] {
+					if existing.gameName.isEmpty && !friend.gameName.isEmpty
+						|| (existing.lastOnline ?? .distantPast) < (friend.lastOnline ?? .distantPast)
+						|| (existing.playerCardID == nil && friend.playerCardID != nil) {
+						account.friendsByJID[jid] = friend
+						accountChanged = true
+					}
+				} else {
+					account.friendsByJID[jid] = friend
+					accountChanged = true
+				}
+			}
+			
+			for (jid, sub) in backup.snapshotSubscriptions where account.snapshotSubscriptions[jid] == nil {
+				account.snapshotSubscriptions[jid] = sub
+				accountChanged = true
+			}
+			
+			let existingEventIDs = Set(account.changeEvents.map(\.id))
+			let newEvents = backup.changeEvents.filter { !existingEventIDs.contains($0.id) }
+			if !newEvents.isEmpty {
+				account.changeEvents = (account.changeEvents + newEvents)
+					.sorted { $0.timestamp > $1.timestamp }
+				if account.changeEvents.count > 200 {
+					account.changeEvents = Array(account.changeEvents.prefix(200))
+				}
+				accountChanged = true
+			}
+			
+			for (puuid, cardID) in backup.cachedCardByPUUID where account.cachedCardByPUUID[puuid] == nil {
+				account.cachedCardByPUUID[puuid] = cardID
+				accountChanged = true
+			}
+			
+			if let synced = backup.lastSyncedAt, (account.lastSyncedAt ?? .distantPast) < synced {
+				account.lastSyncedAt = synced
+			}
+			if let presence = backup.lastPresenceAt, (account.lastPresenceAt ?? .distantPast) < presence {
+				account.lastPresenceAt = presence
+			}
+			
+			if replaceAll || accountChanged {
+				allCaches[key] = account
+				changedAccounts += 1
+			}
+		}
+		
+		cachedAccountsByKey = allCaches
+		await LocalJSONStore.saveAndWait(allCaches, to: Self.cacheFilename)
+		
+		if let activeUser = connectedUserID ?? loadedCacheUserID {
+			let activeKey = cacheKey(for: activeUser)
+			let updated = allCaches[activeKey]
+			var restored = updated?.friendsByJID ?? [:]
+			for jid in restored.keys where connectionState != .connected {
+				restored[jid]?.status = .offline
+			}
+			commitFriends(restored)
+			snapshotSubscriptions = updated?.snapshotSubscriptions ?? [:]
+			changeEvents = updated?.changeEvents ?? []
+			cachedCardByPUUID = updated?.cachedCardByPUUID ?? [:]
+			lastSyncedAt = updated?.lastSyncedAt
+			lastPresenceAt = updated?.lastPresenceAt
+		}
+		
+		return changedAccounts
+	}
+	
+	@discardableResult
+	func importSocialMessages(
+		_ incoming: [String: [String: [XMPPChatMessage]]],
+		replaceAll: Bool
+	) async -> Int {
+		await flushCurrentAccountCacheIfNeeded()
+		var allCaches = await ensureAllCachesLoaded()
+		
+		if replaceAll {
+			for key in Array(allCaches.keys) {
+				var account = allCaches[key]!
+				account.messagesByJID = [:]
+				if account.friendsByJID.isEmpty && account.changeEvents.isEmpty {
+					allCaches.removeValue(forKey: key)
+				} else {
+					allCaches[key] = account
+				}
+			}
+		}
+		
+		var importedMessageCount = 0
+		for (rawKey, conversations) in incoming {
+			let key = rawKey.lowercased()
+			var account = allCaches[key] ?? CachedSocialAccount()
+			var accountChanged = false
+			
+			for (peerJID, messages) in conversations {
+				var merged = account.messagesByJID[peerJID] ?? []
+				var convChanged = false
+				for msg in messages {
+					var normalized = msg
+					normalized.peerJID = peerJID
+					if !merged.contains(where: { isDuplicateMessage($0, normalized) }) {
+						merged.append(normalized)
+						convChanged = true
+						importedMessageCount += 1
+					}
+				}
+				if convChanged {
+					merged.sort { $0.timestamp < $1.timestamp }
+					if merged.count > Self.maxCachedMessagesPerConversation {
+						merged = Array(merged.suffix(Self.maxCachedMessagesPerConversation))
+					}
+					account.messagesByJID[peerJID] = merged
+					accountChanged = true
+				}
+			}
+			
+			if replaceAll || accountChanged {
+				allCaches[key] = account
+			}
+		}
+		
+		cachedAccountsByKey = allCaches
+		await LocalJSONStore.saveAndWait(allCaches, to: Self.cacheFilename)
+		
+		if let activeUser = connectedUserID ?? loadedCacheUserID {
+			let activeKey = cacheKey(for: activeUser)
+			messagesByJID = allCaches[activeKey]?.messagesByJID ?? [:]
+		}
+		
+		return importedMessageCount
 	}
 }
