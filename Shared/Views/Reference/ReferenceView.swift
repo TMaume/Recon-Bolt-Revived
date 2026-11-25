@@ -64,6 +64,14 @@ struct ReferenceView: View {
 					} label: {
 						hubRow(icon: "chart.xyaxis.line", title: "Progress Timelines")
 					}
+					
+					if let userID = accountManager.activeAccount?.id {
+						NavigationLink {
+							MapRatingsView(userID: userID)
+						} label: {
+							hubRow(icon: "map.fill", title: "Map Ranks")
+						}
+					}
 				} header: {
 					Text("Progress")
 				}

@@ -19,6 +19,7 @@ struct MatchListView: View {
 	@State private var computedMastery: [AgentMasterySummary] = []
 	@State private var computedLatestSession: SessionRecapBuilder.LatestSessionPreview? = nil
 	@State private var computedGoalTrajectory: SeasonGoalTrajectory? = nil
+	@State private var computedMapRatings: [MapRatingReport] = []
 	@ObservedObject private var accoladesCache = AccoladesCacheStore.shared
 	@ObservedObject private var filterStore = MatchListFilterStore.shared
 	
@@ -104,6 +105,13 @@ struct MatchListView: View {
 						userID: userID,
 						knownMatchIDs: shownMatches.map(\.id),
 						report: accoladesCache.report(for: userID, act: currentAct, seasons: seasons)
+					)
+					
+					MapRatingSummaryBox(
+						userID: userID,
+						reports: computedMapRatings,
+						allMatches: shownMatches,
+						detailsSnapshot: cachedDetailsSnapshot
 					)
 					
 					if let activeGoal, let trajectory = computedGoalTrajectory {
@@ -326,7 +334,14 @@ struct MatchListView: View {
 							seasons: seasonsSnapshot
 						)
 					}
-					return (mastery, latestSession, trajectory)
+					let mapRatings = MapRatingCalculator.compute(
+						userID: uid,
+						matches: details,
+						selectedActID: nil,
+						seasons: seasonsSnapshot?.collection,
+						assets: assetsSnapshot
+					)
+					return (mastery, latestSession, trajectory, mapRatings)
 				}
 			}.value
 			
@@ -335,6 +350,7 @@ struct MatchListView: View {
 			computedMastery = computed.0
 			computedLatestSession = computed.1
 			computedGoalTrajectory = computed.2
+			computedMapRatings = computed.3
 		}
 		.task(id: AccoladesSyncKey(userID: userID, matchIDs: shownMatches.map(\.id))) {
 			await accoladesCache.syncMissingMatches(for: userID, matchIDs: shownMatches.map(\.id))
