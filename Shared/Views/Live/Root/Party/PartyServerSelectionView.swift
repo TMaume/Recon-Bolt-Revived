@@ -113,23 +113,17 @@ struct PartyServerSelectionView: View {
 				Button {
 					saveServers()
 				} label: {
-					ZStack {
-						Circle()
-							.fill(Color.accentColor)
-							.frame(width: 34, height: 34)
-						if isSaving {
-							ProgressView()
-								.tint(.white)
-								.scaleEffect(0.75)
-						} else {
-							Image(systemName: "checkmark")
-								.font(.subheadline.weight(.bold))
-								.foregroundStyle(.white)
-						}
+					if isSaving {
+						ProgressView()
+							.tint(.white)
+					} else {
+						Image(systemName: "checkmark")
+							.fontWeight(.semibold)
 					}
 				}
+				.buttonStyle(.borderedProminent)
+				.tint(Color.accentColor)
 				.disabled(!canEdit)
-				.opacity(canEdit ? 1 : 0.45)
 			}
 		}
 	}

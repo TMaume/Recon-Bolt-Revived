@@ -448,8 +448,23 @@ struct LiveGameChatView: View {
 			do {
 				if socialManager.connectionState != .connected {
 					await socialManager.connectIfNeeded(using: client)
+					// Wait briefly if an earlier connect task was still in flight.
+					for _ in 0..<25 where socialManager.connectionState == .connecting {
+						try? await Task.sleep(for: .milliseconds(200))
+					}
 				}
-				let token = try await channel.fetchToken(using: client)
+				
+				guard socialManager.connectionState == .connected else {
+					if case .failed(let msg) = socialManager.connectionState {
+						errorByChannelID[channel.id] = msg
+					} else {
+						errorByChannelID[channel.id] = String(localized: "Not connected to Riot XMPP chat.")
+					}
+					return
+				}
+				
+				// GLZ token endpoints (`teamchatmuctoken`, `allchatmuctoken`, `muctoken`) frequently return 500/404; join over XMPP directly when omitted.
+				let token = try? await channel.fetchToken(using: client)
 				let normalizedRoom = socialManager.normalizeMUCRoomJID(
 					channel.rawRoomJID,
 					servicePrefix: channel.servicePrefix

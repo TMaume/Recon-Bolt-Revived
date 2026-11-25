@@ -11,12 +11,19 @@ struct PartyInfoBox: View {
 	var onStartPracticeRange: () async -> Void = {}
 	
 	@State private var showingSettings = false
+	@State private var showingCustomSettings = false
+	@State private var showingPartyChat = false
 	@State private var isTogglingAccessibility = false
+	@State private var optimisticAccessibility: Party.Accessibility?
 	@State private var isStartingRange = false
+	@State private var isRunningCustomAction = false
+	@State private var isExitingCustomGame = false
 	@State private var selectedProfileMemberID: Player.ID?
 	@State private var processingRequestID: String?
 	
+	@Namespace private var accessibilityNamespace
 	@Environment(\.valorantLoad) private var load
+	@Environment(\.assets) private var assets
 	
 	var member: Party.Member {
 		party.members.firstElement(withID: userID)
@@ -27,18 +34,26 @@ struct PartyInfoBox: View {
 		member.isOwner
 	}
 	
+	private var displayedAccessibility: Party.Accessibility {
+		optimisticAccessibility ?? party.accessibility
+	}
+	
 	var body: some View {
 		VStack(spacing: 14) {
-			VStack(spacing: 10) {
-				ForEach(party.members) { partyMember in
-					PartyMemberRow(
-						party: $party,
-						member: partyMember,
-						userID: userID,
-						isSelfOwner: isSelfOwner,
-						onViewProfile: { selectedProfileMemberID = partyMember.id },
-						onPartyChanged: onPartyChanged
-					)
+			if party.isCustomGame {
+				customGameLobbyContent
+			} else {
+				VStack(spacing: 10) {
+					ForEach(party.members) { partyMember in
+						PartyMemberRow(
+							party: $party,
+							member: partyMember,
+							userID: userID,
+							isSelfOwner: isSelfOwner,
+							onViewProfile: { selectedProfileMemberID = partyMember.id },
+							onPartyChanged: onPartyChanged
+						)
+					}
 				}
 			}
 			
@@ -79,7 +94,339 @@ struct PartyInfoBox: View {
 				onStartPracticeRange: onStartPracticeRange
 			)
 		}
+		.sheet(isPresented: $showingCustomSettings) {
+			PartyCustomGameSettingsSheet(
+				party: $party,
+				userID: userID,
+				onPartyChanged: onPartyChanged
+			)
+		}
+		.sheet(isPresented: $showingPartyChat) {
+			if let partyRoom = party.mucName, !partyRoom.isEmpty {
+				LiveGameChatView(
+					channels: [.party(roomJID: partyRoom, partyID: party.id)],
+					userID: userID
+				)
+			}
+		}
+		.onChange(of: party.accessibility) { _ in
+			if !isTogglingAccessibility {
+				withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
+					optimisticAccessibility = nil
+				}
+			}
+		}
 	}
+	
+	// MARK: - Custom Game Lobby
+	
+	@ViewBuilder
+	private var customGameLobbyContent: some View {
+		let customData = party.customGameData ?? .init()
+		let membership = customData.membership
+		let settings = customData.settings
+		let rules = settings.gameRules
+		let membersByID = Dictionary(uniqueKeysWithValues: party.members.map { ($0.id, $0) })
+		let assignedIDs = Set(
+			membership.teamOne.map(\.subject)
+			+ membership.teamTwo.map(\.subject)
+			+ membership.teamSpectate.map(\.subject)
+			+ membership.teamOneCoaches.map(\.subject)
+			+ membership.teamTwoCoaches.map(\.subject)
+		)
+		let unassignedMembers = party.members.filter { !assignedIDs.contains($0.id) }
+		let showCoaches = rules?.tournamentModeEnabled == true
+			|| !membership.teamOneCoaches.isEmpty
+			|| !membership.teamTwoCoaches.isEmpty
+		
+		VStack(spacing: 12) {
+			customGameSummaryBanner(settings: settings)
+			
+			customTeamSection(
+				title: "Attackers",
+				team: .teamOne,
+				members: membership.teamOne.compactMap { membersByID[$0.subject] },
+				accentColor: .valorantRed,
+				canJoin: membership.team(for: userID) != .teamOne
+			)
+			
+			customTeamSection(
+				title: "Defenders",
+				team: .teamTwo,
+				members: membership.teamTwo.compactMap { membersByID[$0.subject] },
+				accentColor: .valorantBlue,
+				canJoin: membership.team(for: userID) != .teamTwo
+			)
+			
+			customTeamSection(
+				title: "Spectators",
+				team: .spectate,
+				members: membership.teamSpectate.compactMap { membersByID[$0.subject] },
+				accentColor: .secondary,
+				joinLabel: "Spectate",
+				canJoin: membership.team(for: userID) != .spectate
+			)
+			
+			if showCoaches {
+				customTeamSection(
+					title: "Attackers Coach",
+					team: .teamOneCoaches,
+					members: membership.teamOneCoaches.compactMap { membersByID[$0.subject] },
+					accentColor: .valorantRed.opacity(0.8),
+					joinLabel: "Coach",
+					canJoin: membership.team(for: userID) != .teamOneCoaches
+				)
+				
+				customTeamSection(
+					title: "Defenders Coach",
+					team: .teamTwoCoaches,
+					members: membership.teamTwoCoaches.compactMap { membersByID[$0.subject] },
+					accentColor: .valorantBlue.opacity(0.8),
+					joinLabel: "Coach",
+					canJoin: membership.team(for: userID) != .teamTwoCoaches
+				)
+			}
+			
+			if !unassignedMembers.isEmpty {
+				VStack(alignment: .leading, spacing: 6) {
+					Text("Unassigned")
+						.font(.caption.weight(.bold))
+						.foregroundStyle(.secondary)
+						.padding(.horizontal, 4)
+					
+					ForEach(unassignedMembers) { partyMember in
+						PartyMemberRow(
+							party: $party,
+							member: partyMember,
+							userID: userID,
+							isSelfOwner: isSelfOwner,
+							onViewProfile: { selectedProfileMemberID = partyMember.id },
+							onPartyChanged: onPartyChanged,
+							onMoveCustomTeam: { movePlayer(partyMember.id, to: $0) }
+						)
+					}
+				}
+			}
+			
+			customGameUtilityRow
+		}
+	}
+	
+	private func customGameSummaryBanner(settings: Party.CustomGameData.Settings) -> some View {
+		let mapPath = settings.map.isEmpty ? MapID.ascent.rawValue : settings.map
+		let mapID = MapID(mapPath)
+		let mapName = assets?.maps[mapID]?.displayName ?? mapPath.split(separator: "/").last.map(String.init) ?? "Custom Map"
+		let modeName = customModeLabel(for: settings.mode)
+		let serverName: String = {
+			guard !settings.gamePod.isEmpty else { return String(localized: "Auto Server") }
+			return assets?.serverDisplayName(for: settings.gamePod)
+				?? MatchAnalytics.parseServerName(from: settings.gamePod)
+				?? settings.gamePod
+		}()
+		let rules = settings.gameRules
+		let activeFlags: [String] = [
+			rules?.allowCheats == true ? "Cheats" : nil,
+			rules?.tournamentModeEnabled == true ? "Tournament" : nil,
+			rules?.overtimeWinByTwo == true ? "OT Win by 2" : nil,
+			rules?.playOutAllRoundsEnabled == true ? "Play All" : nil,
+			rules?.hideMatchHistory == true ? "Skip History" : nil,
+		].compactMap { $0 }
+		
+		return ZStack(alignment: .bottomLeading) {
+			MapImage.splash(mapID)
+				.aspectRatio(contentMode: .fill)
+				.frame(height: 108)
+				.clipped()
+				.overlay(
+					LinearGradient(
+						colors: [.black.opacity(0.2), .black.opacity(0.84)],
+						startPoint: .top,
+						endPoint: .bottom
+					)
+				)
+			
+			HStack(alignment: .bottom) {
+				VStack(alignment: .leading, spacing: 3) {
+					Text("CUSTOM GAME")
+						.font(.system(size: 10, weight: .bold))
+						.tracking(0.8)
+						.foregroundStyle(Color.accentColor)
+					
+					Text(mapName)
+						.font(.headline.weight(.bold))
+						.foregroundStyle(.white)
+					
+					Text("\(modeName) · \(serverName)")
+						.font(.caption)
+						.foregroundStyle(.white.opacity(0.8))
+					
+					if !activeFlags.isEmpty {
+						Text(activeFlags.joined(separator: " · "))
+							.font(.system(size: 10, weight: .semibold))
+							.foregroundStyle(.white.opacity(0.75))
+							.lineLimit(1)
+					}
+				}
+				
+				Spacer()
+				
+				if isSelfOwner {
+					Button {
+						showingCustomSettings = true
+					} label: {
+						Label("Edit", systemImage: "slider.horizontal.3")
+							.font(.caption.weight(.semibold))
+							.foregroundStyle(.white)
+							.padding(.horizontal, 10)
+							.padding(.vertical, 6)
+							.background(.ultraThinMaterial, in: Capsule())
+					}
+					.buttonStyle(.plain)
+				}
+			}
+			.padding(12)
+		}
+		.clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+	}
+	
+	private func customTeamSection(
+		title: LocalizedStringKey,
+		team: CustomGameTeam,
+		members: [Party.Member],
+		accentColor: Color,
+		joinLabel: LocalizedStringKey = "Join",
+		canJoin: Bool
+	) -> some View {
+		VStack(alignment: .leading, spacing: 6) {
+			HStack {
+				HStack(spacing: 6) {
+					Circle()
+						.fill(accentColor)
+						.frame(width: 7, height: 7)
+					Text(title)
+						.font(.caption.weight(.bold))
+						.foregroundStyle(.primary)
+					Text("(\(members.count))")
+						.font(.caption2.weight(.semibold))
+						.foregroundStyle(.secondary)
+						.monospacedDigit()
+				}
+				
+				Spacer()
+				
+				if canJoin && party.state == .customGameSetup {
+					Button {
+						movePlayer(userID, to: team)
+					} label: {
+						Text(joinLabel)
+							.font(.caption2.weight(.bold))
+							.foregroundStyle(accentColor == .secondary ? Color.accentColor : accentColor)
+							.padding(.horizontal, 10)
+							.padding(.vertical, 4)
+							.background(Color.tertiaryGroupedBackground, in: Capsule())
+					}
+					.buttonStyle(.plain)
+					.disabled(isRunningCustomAction)
+				}
+			}
+			.padding(.horizontal, 4)
+			
+			if members.isEmpty {
+				Text("Empty slot")
+					.font(.caption)
+					.foregroundStyle(.tertiary)
+					.frame(maxWidth: .infinity, alignment: .leading)
+					.padding(.horizontal, 12)
+					.padding(.vertical, 8)
+					.background(Color.tertiaryGroupedBackground.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+			} else {
+				VStack(spacing: 8) {
+					ForEach(members) { partyMember in
+						PartyMemberRow(
+							party: $party,
+							member: partyMember,
+							userID: userID,
+							isSelfOwner: isSelfOwner,
+							onViewProfile: { selectedProfileMemberID = partyMember.id },
+							onPartyChanged: onPartyChanged,
+							onMoveCustomTeam: { movePlayer(partyMember.id, to: $0) }
+						)
+					}
+				}
+			}
+		}
+	}
+	
+	private var customGameUtilityRow: some View {
+		HStack(spacing: 8) {
+			if isSelfOwner && party.state == .customGameSetup {
+				Button {
+					balanceTeams()
+				} label: {
+					Label("Balance", systemImage: "arrow.triangle.swap")
+						.font(.caption.weight(.semibold))
+						.frame(maxWidth: .infinity)
+						.padding(.vertical, 9)
+						.background(Color.tertiaryGroupedBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+						.contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+						.foregroundStyle(.primary)
+				}
+				.buttonStyle(.plain)
+				.disabled(isRunningCustomAction || party.members.count < 2)
+				
+				Button {
+					exitCustomGame()
+				} label: {
+					HStack(spacing: 6) {
+						if isExitingCustomGame {
+							ProgressView()
+								.controlSize(.mini)
+						} else {
+							Image(systemName: "arrow.uturn.backward")
+						}
+						Text("Standard")
+					}
+					.font(.caption.weight(.semibold))
+					.frame(maxWidth: .infinity)
+					.padding(.vertical, 9)
+					.background(Color.tertiaryGroupedBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+					.contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+					.foregroundStyle(Color.accentColor)
+				}
+				.buttonStyle(.plain)
+				.disabled(isRunningCustomAction)
+			}
+			
+			if let partyRoom = party.mucName, !partyRoom.isEmpty {
+				Button {
+					showingPartyChat = true
+				} label: {
+					Label("Chat", systemImage: "bubble.left.and.bubble.right")
+						.font(.caption.weight(.semibold))
+						.frame(maxWidth: isSelfOwner ? nil : .infinity)
+						.padding(.horizontal, 12)
+						.padding(.vertical, 9)
+						.background(Color.tertiaryGroupedBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+						.foregroundStyle(Color.valorantBlue)
+				}
+				.buttonStyle(.plain)
+			}
+		}
+	}
+	
+	private func customModeLabel(for path: String) -> String {
+		let lower = path.lowercased()
+		if lower.contains("quickbomb") { return String(localized: "Spike Rush") }
+		if lower.contains("swiftplay") { return String(localized: "Swiftplay") }
+		if lower.contains("deathmatch") { return String(localized: "Deathmatch") }
+		if lower.contains("gungame") { return String(localized: "Escalation") }
+		if lower.contains("oneforall") { return String(localized: "Replication") }
+		if lower.contains("hurm") { return String(localized: "Team Deathmatch") }
+		if lower.contains("shootingrange") { return String(localized: "Practice Range") }
+		return String(localized: "Standard")
+	}
+	
+	// MARK: - Bottom Bar
 	
 	private var bottomControlsBar: some View {
 		HStack(spacing: 10) {
@@ -107,7 +454,9 @@ struct PartyInfoBox: View {
 	}
 	
 	private var accessibilitySegmentedPill: some View {
-		let canToggle = isSelfOwner && party.state == .default && !isTogglingAccessibility
+		let canToggle = isSelfOwner
+			&& (party.state == .default || party.state == .customGameSetup)
+			&& !isTogglingAccessibility
 		
 		return HStack(spacing: 2) {
 			accessibilityButton(.open, icon: "lock.open", canToggle: canToggle)
@@ -115,7 +464,7 @@ struct PartyInfoBox: View {
 		}
 		.padding(4)
 		.background(Color.tertiaryGroupedBackground, in: Capsule())
-		.opacity((isSelfOwner && party.state == .default) ? 1 : 0.65)
+		.opacity((isSelfOwner && (party.state == .default || party.state == .customGameSetup)) ? 1 : 0.65)
 	}
 	
 	private func accessibilityButton(
@@ -123,9 +472,9 @@ struct PartyInfoBox: View {
 		icon: String,
 		canToggle: Bool
 	) -> some View {
-		let isActive = party.accessibility == target
+		let isActive = displayedAccessibility == target
 		return Button {
-			guard party.accessibility != target else { return }
+			guard displayedAccessibility != target else { return }
 			setAccessibility(to: target)
 		} label: {
 			Image(systemName: icon)
@@ -136,6 +485,7 @@ struct PartyInfoBox: View {
 					if isActive {
 						Capsule()
 							.fill(Color.secondaryGroupedBackground)
+							.matchedGeometryEffect(id: "accessibilityThumb", in: accessibilityNamespace)
 							.shadow(color: .black.opacity(0.25), radius: 3, x: 0, y: 1)
 					}
 				}
@@ -143,6 +493,7 @@ struct PartyInfoBox: View {
 		.buttonStyle(.plain)
 		.disabled(!canToggle)
 		.accessibilityLabel(target == .open ? "Open Party" : "Closed Party")
+		.animation(.spring(response: 0.28, dampingFraction: 0.78), value: displayedAccessibility)
 	}
 	
 	@ViewBuilder
@@ -167,6 +518,40 @@ struct PartyInfoBox: View {
 				.overlay(Capsule().strokeBorder(Color.accentColor.opacity(0.4), lineWidth: 1))
 			}
 			.buttonStyle(.plain)
+		case .customGameStarting:
+			HStack(spacing: 8) {
+				ProgressView()
+					.scaleEffect(0.8)
+				Text("Starting")
+					.font(.subheadline.weight(.semibold))
+			}
+			.foregroundStyle(Color.accentColor)
+			.padding(.horizontal, 18)
+			.padding(.vertical, 11)
+			.background(Color.tertiaryGroupedBackground, in: Capsule())
+		case .customGameSetup:
+			let membership = party.customGameData?.membership
+			let hasTeamPlayers = !(membership?.teamOne.isEmpty ?? true) || !(membership?.teamTwo.isEmpty ?? true)
+			let canStartCustom = isSelfOwner && hasTeamPlayers
+			AsyncButton {
+				await load {
+					party = try await $0.startCustomGame(in: party.id)
+				}
+			} label: {
+				HStack(spacing: 7) {
+					Text("Start")
+						.font(.headline.weight(.semibold))
+					Image(systemName: "play.fill")
+						.font(.caption.weight(.bold))
+				}
+				.foregroundStyle(Color.accentColor)
+				.padding(.horizontal, 20)
+				.padding(.vertical, 11)
+				.background(Color.tertiaryGroupedBackground, in: Capsule())
+			}
+			.buttonStyle(.plain)
+			.disabled(!canStartCustom)
+			.opacity(canStartCustom ? 1 : 0.45)
 		case .default:
 			let canStart = isSelfOwner && party.members.allSatisfy(\.isReady)
 			AsyncButton {
@@ -194,7 +579,9 @@ struct PartyInfoBox: View {
 	}
 	
 	private var practiceRangeButton: some View {
-		let canEnterRange = party.members.count <= 1 && party.state == .default && !isStartingRange
+		let canEnterRange = party.members.count <= 1
+			&& (party.state == .default || party.state == .customGameSetup)
+			&& !isStartingRange
 		return Button {
 			Task {
 				isStartingRange = true
@@ -217,7 +604,7 @@ struct PartyInfoBox: View {
 		}
 		.buttonStyle(.plain)
 		.disabled(!canEnterRange)
-		.opacity((party.members.count <= 1 && party.state == .default) ? 1 : 0.4)
+		.opacity((party.members.count <= 1 && (party.state == .default || party.state == .customGameSetup)) ? 1 : 0.4)
 		.accessibilityLabel("Practice Range")
 	}
 	
@@ -273,9 +660,59 @@ struct PartyInfoBox: View {
 	private func setAccessibility(to accessibility: Party.Accessibility) {
 		Task {
 			isTogglingAccessibility = true
-			defer { isTogglingAccessibility = false }
+			withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
+				optimisticAccessibility = accessibility
+			}
+			defer {
+				isTogglingAccessibility = false
+				withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) {
+					optimisticAccessibility = nil
+				}
+			}
 			await load {
 				party = try await $0.setPartyAccessibility(in: party.id, to: accessibility)
+			}
+		}
+	}
+	
+	private func movePlayer(_ playerID: Player.ID, to team: CustomGameTeam) {
+		Task {
+			isRunningCustomAction = true
+			defer { isRunningCustomAction = false }
+			await load {
+				party = try await $0.changeCustomGameTeam(player: playerID, to: team, in: party.id)
+			}
+		}
+	}
+	
+	private func balanceTeams() {
+		Task {
+			isRunningCustomAction = true
+			defer { isRunningCustomAction = false }
+			await load {
+				party = try await $0.balanceCustomGameTeams(in: party.id)
+			}
+		}
+	}
+	
+	private func exitCustomGame() {
+		Task {
+			isRunningCustomAction = true
+			isExitingCustomGame = true
+			defer {
+				isRunningCustomAction = false
+				isExitingCustomGame = false
+			}
+			let targetQueue = party.eligibleQueues?.first(where: { $0 == .unrated })
+				?? party.eligibleQueues?.first
+				?? .unrated
+			var exited = false
+			await load {
+				party = try await $0.makeDefaultQueue(targetQueue, in: party.id)
+				exited = true
+			}
+			if exited {
+				await onPartyChanged()
 			}
 		}
 	}
@@ -319,6 +756,7 @@ struct PartyInfoBox: View {
 		let isSelfOwner: Bool
 		var onViewProfile: () -> Void
 		var onPartyChanged: () async -> Void
+		var onMoveCustomTeam: ((CustomGameTeam) -> Void)? = nil
 		
 		@State private var isSettingReady = false
 		@State private var isRunningAction = false
@@ -334,7 +772,8 @@ struct PartyInfoBox: View {
 			userID: User.ID,
 			isSelfOwner: Bool,
 			onViewProfile: @escaping () -> Void = {},
-			onPartyChanged: @escaping () async -> Void = {}
+			onPartyChanged: @escaping () async -> Void = {},
+			onMoveCustomTeam: ((CustomGameTeam) -> Void)? = nil
 		) {
 			self._party = party
 			self.member = member
@@ -342,8 +781,15 @@ struct PartyInfoBox: View {
 			self.isSelfOwner = isSelfOwner
 			self.onViewProfile = onViewProfile
 			self.onPartyChanged = onPartyChanged
+			self.onMoveCustomTeam = onMoveCustomTeam
 			self._memberUser = .init(id: member.id)
 			self._summary = .init(id: member.id)
+		}
+		
+		private var canMoveCustomTeam: Bool {
+			onMoveCustomTeam != nil
+				&& party.state == .customGameSetup
+				&& (isSelfOwner || member.id == userID)
 		}
 		
 		var body: some View {
@@ -371,7 +817,11 @@ struct PartyInfoBox: View {
 							.foregroundStyle(.secondary)
 					}
 					
-					if member.isReady {
+					if party.isCustomGame {
+						Text(customRoleSubtitle)
+							.font(.subheadline)
+							.foregroundStyle(.secondary)
+					} else if member.isReady {
 						Text("Ready", comment: "Party Box")
 							.font(.subheadline)
 							.foregroundStyle(.secondary)
@@ -385,15 +835,22 @@ struct PartyInfoBox: View {
 				Spacer(minLength: 8)
 				
 				if member.id == userID {
-					if isSettingReady {
-						ProgressView()
-					} else {
-						Toggle(String(localized: "Ready", comment: "accessibility label"), isOn: Binding(
-							get: { member.isReady },
-							set: { setReady(to: $0) }
-						))
-						.labelsHidden()
-						.tint(Color.accentColor)
+					HStack(spacing: 8) {
+						if canMoveCustomTeam {
+							customTeamMenuButton
+						}
+						if !party.isCustomGame {
+							if isSettingReady {
+								ProgressView()
+							} else {
+								Toggle(String(localized: "Ready", comment: "accessibility label"), isOn: Binding(
+									get: { member.isReady },
+									set: { setReady(to: $0) }
+								))
+								.labelsHidden()
+								.tint(Color.accentColor)
+							}
+						}
 					}
 				} else {
 					HStack(spacing: 8) {
@@ -406,7 +863,11 @@ struct PartyInfoBox: View {
 								Label("View Profile", systemImage: "person.crop.circle")
 							}
 							
-							if isSelfOwner && party.state == .default {
+							if canMoveCustomTeam {
+								customTeamMenuItems
+							}
+							
+							if isSelfOwner && (party.state == .default || party.state == .customGameSetup) {
 								Button {
 									makeLeader()
 								} label: {
@@ -456,6 +917,10 @@ struct PartyInfoBox: View {
 			}
 			.contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 			.contextMenu {
+				if canMoveCustomTeam {
+					customTeamMenuItems
+				}
+				
 				if member.id != userID {
 					Button {
 						onViewProfile()
@@ -463,7 +928,7 @@ struct PartyInfoBox: View {
 						Label("View Profile", systemImage: "person.crop.circle")
 					}
 					
-					if isSelfOwner && party.state == .default {
+					if isSelfOwner && (party.state == .default || party.state == .customGameSetup) {
 						Button {
 							makeLeader()
 						} label: {
@@ -480,6 +945,50 @@ struct PartyInfoBox: View {
 			}
 			.withLocalData($memberUser, id: member.id, shouldAutoUpdate: true)
 			.withLocalData($summary, id: member.id, shouldAutoUpdate: true)
+		}
+		
+		private var customRoleSubtitle: LocalizedStringKey {
+			switch party.customGameData?.membership.team(for: member.id) {
+			case .teamOne: return "Attackers"
+			case .teamTwo: return "Defenders"
+			case .spectate: return "Spectator"
+			case .teamOneCoaches: return "Attackers Coach"
+			case .teamTwoCoaches: return "Defenders Coach"
+			case nil: return "Unassigned"
+			}
+		}
+		
+		private var customTeamMenuButton: some View {
+			Menu {
+				customTeamMenuItems
+			} label: {
+				Image(systemName: "arrow.left.arrow.right.circle.fill")
+					.font(.title3)
+					.foregroundStyle(Color.accentColor)
+			}
+		}
+		
+		@ViewBuilder
+		private var customTeamMenuItems: some View {
+			if let onMoveCustomTeam {
+				Button { onMoveCustomTeam(.teamOne) } label: {
+					Label("Move to Attackers", systemImage: "flame.fill")
+				}
+				Button { onMoveCustomTeam(.teamTwo) } label: {
+					Label("Move to Defenders", systemImage: "shield.fill")
+				}
+				Button { onMoveCustomTeam(.spectate) } label: {
+					Label("Move to Spectators", systemImage: "eye.fill")
+				}
+				if party.customGameData?.settings.gameRules?.tournamentModeEnabled == true {
+					Button { onMoveCustomTeam(.teamOneCoaches) } label: {
+						Label("Attackers Coach", systemImage: "person.badge.shield.checkmark")
+					}
+					Button { onMoveCustomTeam(.teamTwoCoaches) } label: {
+						Label("Defenders Coach", systemImage: "person.badge.shield.checkmark")
+					}
+				}
+			}
 		}
 		
 		func setReady(to isReady: Bool) {

@@ -260,6 +260,15 @@ struct LiveGameBox: View {
 		partyPlayer = try? await fetchedPlayer
 		party = loadedParty
 		if let loadedParty {
+			if activeMatch != nil, !isActiveMatchShootingRange,
+			   let partyRoom = loadedParty.mucName, !partyRoom.isEmpty,
+			   !activeChatChannels.contains(where: {
+				   if case .party = $0 { return true }
+				   return false
+			   })
+			{
+				activeChatChannels.append(.party(roomJID: partyRoom, partyID: loadedParty.id))
+			}
 			LocalDataProvider.dataFetched(loadedParty)
 			var ids = loadedParty.members.map(\.id)
 			ids.append(contentsOf: loadedParty.requests.map(\.requestedBy))
@@ -272,7 +281,18 @@ struct LiveGameBox: View {
 	
 	func startPracticeRange() async {
 		await load { client in
-			try await client.startSoloExperience()
+			let currentParty: Party?
+			if let existing = party {
+				currentParty = existing
+			} else {
+				currentParty = try? await client.getPartyInfo()
+			}
+			if let partyID = currentParty?.id {
+				let preferredPod = currentParty?.matchmakingData.preferredGamePods.first
+				try await client.startPracticeRange(in: partyID, preferredGamePod: preferredPod)
+			} else {
+				try await client.startSoloExperience()
+			}
 			isActiveMatchShootingRange = true
 			for _ in 0..<8 {
 				if let match = try await client.getActiveMatch() {

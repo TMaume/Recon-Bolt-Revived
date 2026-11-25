@@ -10,6 +10,8 @@ struct PartySettingsView: View {
 	
 	@State private var isChangingQueue = false
 	@State private var showingPartyCode = false
+	@State private var showingCustomSettings = false
+	@State private var isTogglingCustomMode = false
 	@State private var showingInviteAlert = false
 	@State private var inviteName = ""
 	@State private var inviteTag = ""
@@ -69,17 +71,23 @@ struct PartySettingsView: View {
 						dismiss()
 					} label: {
 						Image(systemName: "xmark")
-							.font(.subheadline.weight(.bold))
+							.fontWeight(.semibold)
 							.foregroundStyle(Color.accentColor)
-							.frame(width: 34, height: 34)
-							.background(Color.secondaryGroupedBackground, in: Circle())
 					}
+					.accessibilityLabel("Close")
 				}
 			}
 			.sheet(isPresented: $showingPartyCode) {
 				PartyCodeSheet(
 					party: $party,
 					isOwner: isOwner,
+					onPartyChanged: onPartyChanged
+				)
+			}
+			.sheet(isPresented: $showingCustomSettings) {
+				PartyCustomGameSettingsSheet(
+					party: $party,
+					userID: userID,
 					onPartyChanged: onPartyChanged
 				)
 			}
@@ -316,6 +324,97 @@ struct PartySettingsView: View {
 				.padding(.horizontal, 6)
 			
 			VStack(spacing: 0) {
+				if party.isCustomGame {
+					Button {
+						showingCustomSettings = true
+					} label: {
+						HStack(spacing: 14) {
+							Image(systemName: "slider.horizontal.3")
+								.font(.body.weight(.medium))
+								.foregroundStyle(Color.accentColor)
+								.frame(width: 24)
+							
+							Text("Custom Game Settings")
+								.font(.body)
+								.foregroundStyle(.primary)
+							
+							Spacer()
+							
+							Image(systemName: "chevron.right")
+								.font(.caption.weight(.semibold))
+								.foregroundStyle(.tertiary)
+						}
+						.padding(.horizontal, 16)
+						.padding(.vertical, 14)
+						.contentShape(Rectangle())
+					}
+					.buttonStyle(.plain)
+					
+					Divider()
+						.padding(.leading, 54)
+					
+					Button {
+						switchCustomMode(enabled: false)
+					} label: {
+						HStack(spacing: 14) {
+							Image(systemName: "arrow.uturn.backward")
+								.font(.body.weight(.medium))
+								.foregroundStyle(Color.accentColor)
+								.frame(width: 24)
+							
+							Text("Return to Standard Queue")
+								.font(.body)
+								.foregroundStyle(Color.accentColor)
+							
+							Spacer()
+							
+							if isTogglingCustomMode {
+								ProgressView()
+							}
+						}
+						.padding(.horizontal, 16)
+						.padding(.vertical, 14)
+						.contentShape(Rectangle())
+					}
+					.buttonStyle(.plain)
+					.disabled(!canEditMatchmakingSettings || isTogglingCustomMode)
+					.opacity(canEditMatchmakingSettings ? 1 : 0.45)
+				} else {
+					Button {
+						switchCustomMode(enabled: true)
+					} label: {
+						HStack(spacing: 14) {
+							Image(systemName: "wrench.and.screwdriver")
+								.font(.body.weight(.medium))
+								.foregroundStyle(Color.accentColor)
+								.frame(width: 24)
+							
+							Text("Custom Game")
+								.font(.body)
+								.foregroundStyle(.primary)
+							
+							Spacer()
+							
+							if isTogglingCustomMode {
+								ProgressView()
+							} else {
+								Image(systemName: "chevron.right")
+									.font(.caption.weight(.semibold))
+									.foregroundStyle(.tertiary)
+							}
+						}
+						.padding(.horizontal, 16)
+						.padding(.vertical, 14)
+						.contentShape(Rectangle())
+					}
+					.buttonStyle(.plain)
+					.disabled(!canEditMatchmakingSettings || isTogglingCustomMode)
+					.opacity(canEditMatchmakingSettings ? 1 : 0.45)
+				}
+				
+				Divider()
+					.padding(.leading, 54)
+				
 				Button {
 					dismiss()
 					Task {
@@ -430,6 +529,31 @@ struct PartySettingsView: View {
 		Task {
 			await load {
 				party = try await $0.inviteToParty(name: trimmedName, tag: trimmedTag, in: party.id)
+			}
+		}
+	}
+	
+	private func switchCustomMode(enabled: Bool) {
+		Task {
+			isTogglingCustomMode = true
+			defer { isTogglingCustomMode = false }
+			let targetQueue = party.eligibleQueues?.first(where: { $0 == .unrated })
+				?? party.eligibleQueues?.first
+				?? .unrated
+			var switched = false
+			await load {
+				if enabled {
+					party = try await $0.makeCustomGame(in: party.id)
+				} else {
+					party = try await $0.makeDefaultQueue(targetQueue, in: party.id)
+				}
+				switched = true
+			}
+			if switched {
+				await onPartyChanged()
+				if enabled {
+					showingCustomSettings = true
+				}
 			}
 		}
 	}

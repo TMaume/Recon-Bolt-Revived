@@ -456,6 +456,7 @@ struct MapRatingsView: View {
 	@State private var zoomingMinimapID: MapID?
 	@State private var isSyncingMatches = false
 	@State private var syncedProgress: (done: Int, total: Int)?
+	@State private var unavailableSyncIDs: Set<Match.ID> = []
 	
 	@Environment(\.valorantLoad) private var load
 	@Environment(\.assets) private var assets
@@ -481,16 +482,20 @@ struct MapRatingsView: View {
 	}
 	
 	private var uncachedEligibleIDs: [Match.ID] {
-		activeMatches
+		let selectedAct = selectedActID.flatMap { seasons?.act($0) }
+		return activeMatches
 			.filter { match in
 				guard match.mapID != nil else { return false }
+				if let selectedAct, !selectedAct.timeSpan.contains(match.startTime) {
+					return false
+				}
 				if queueScope == .competitiveAndPremier {
 					return match.isRanked
 				}
 				return true
 			}
 			.map(\.id)
-			.filter { loadedDetails[$0] == nil }
+			.filter { loadedDetails[$0] == nil && !unavailableSyncIDs.contains($0) }
 	}
 	
 	private var selectedReport: MapRatingReport? {
@@ -655,14 +660,15 @@ struct MapRatingsView: View {
 			
 			VStack(alignment: .leading, spacing: 2) {
 				if let syncedProgress {
-					Text("Syncing match details (\(syncedProgress.done)/\(syncedProgress.total))…")
+					Text("Downloading match history (\(syncedProgress.done)/\(syncedProgress.total))…")
 						.font(.caption.weight(.semibold))
 				} else {
-					Text("\(uncachedEligibleIDs.count) match details not cached yet")
+					Text("History Sync · \(uncachedEligibleIDs.count) match detail\(uncachedEligibleIDs.count == 1 ? "" : "s") missing")
 						.font(.caption.weight(.semibold))
-					Text("Fetch match details to calculate accurate Map Ranks.")
+					Text("Optional: download past match files from your history (different from the 5 placement matches needed to unlock a map tier).")
 						.font(.caption2)
 						.foregroundStyle(.secondary)
+						.fixedSize(horizontal: false, vertical: true)
 				}
 			}
 			
@@ -675,7 +681,7 @@ struct MapRatingsView: View {
 					ProgressView()
 						.scaleEffect(0.85)
 				} else {
-					Text("Sync")
+					Text("Load")
 						.font(.caption.weight(.bold))
 						.foregroundStyle(.white)
 						.padding(.horizontal, 12)
@@ -821,21 +827,36 @@ struct MapRatingsView: View {
 			}
 			
 			if report.isCalibrating {
-				HStack(spacing: 12) {
-					MapTierBadgeView(tier: .uncalibrated, size: 36)
-					
-					VStack(alignment: .leading, spacing: 3) {
-						Text("Your map rank on \(mapName) is still calibrating. Play more matches to reveal your tier.")
-							.font(.caption)
-							.foregroundStyle(.white.opacity(0.82))
-							.fixedSize(horizontal: false, vertical: true)
+				let playedCount = min(MapRatingReport.calibrationRequiredMatches, report.totalMatches)
+				VStack(alignment: .leading, spacing: 10) {
+					HStack(spacing: 12) {
+						MapTierBadgeView(tier: .uncalibrated, size: 36)
 						
-						Text("Matches remaining: \(report.matchesRemainingForCalibration)")
-							.font(.caption.weight(.bold))
-							.foregroundStyle(.white)
+						VStack(alignment: .leading, spacing: 3) {
+							Text("Placement: \(playedCount) / \(MapRatingReport.calibrationRequiredMatches) matches played")
+								.font(.caption.weight(.bold))
+								.foregroundStyle(.white)
+							
+							Text("Play \(report.matchesRemainingForCalibration) more \(queueScope == .competitiveAndPremier ? "Competitive/Premier" : "eligible") match\(report.matchesRemainingForCalibration == 1 ? "" : "es") on \(mapName) to unlock your tier (C–S).")
+								.font(.caption2)
+								.foregroundStyle(.white.opacity(0.78))
+								.fixedSize(horizontal: false, vertical: true)
+						}
+						
+						Spacer(minLength: 0)
 					}
 					
-					Spacer(minLength: 0)
+					HStack(spacing: 6) {
+						ForEach(0..<MapRatingReport.calibrationRequiredMatches, id: \.self) { index in
+							Capsule()
+								.fill(
+									index < playedCount
+									? Color.accentColor
+									: Color.white.opacity(0.16)
+								)
+								.frame(height: 5)
+						}
+					}
 				}
 				.padding(12)
 				.background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -1091,143 +1112,155 @@ struct MapRatingsView: View {
 	// MARK: - Match History Table Card (Bottom Right in Game)
 	
 	private func matchHistoryTableCard(_ report: MapRatingReport) -> some View {
-		VStack(spacing: 0) {
-			// Column Header
-			HStack(spacing: 8) {
-				Text("RANK")
-					.frame(maxWidth: .infinity, alignment: .leading)
-					.padding(.leading, 42)
-				Text("PERF.")
-					.frame(width: 48, alignment: .trailing)
-				Text("ATK%")
-					.frame(width: 48, alignment: .trailing)
-				Text("DEF%")
-					.frame(width: 48, alignment: .trailing)
-			}
-			.font(.system(size: 10, weight: .bold))
-			.foregroundStyle(.secondary)
-			.padding(.horizontal, 12)
-			.padding(.vertical, 10)
-			
-			Divider()
-				.opacity(0.35)
-			
-			if let best = report.bestMatch {
-				VStack(spacing: 0) {
-					HStack(spacing: 4) {
-						Image(systemName: "arrowtriangle.up.fill")
-							.font(.system(size: 8))
-						Text("BEST MATCH OF THE ACT")
-							.font(.system(size: 10, weight: .black))
-							.tracking(0.4)
-						Spacer()
-					}
-					.foregroundStyle(.black)
-					.padding(.horizontal, 10)
-					.padding(.vertical, 4)
-					.background(
-						LinearGradient(
-							colors: [
-								Color(red: 0.90, green: 0.72, blue: 0.28),
-								Color(red: 0.90, green: 0.72, blue: 0.28).opacity(0.25)
-							],
-							startPoint: .leading,
-							endPoint: .trailing
-						)
-					)
-					
-					matchHistoryRow(best)
-				}
-				
-				Divider()
-					.opacity(0.35)
-			}
-			
-			ForEach(Array(report.matches.enumerated()), id: \.element.id) { index, entry in
-				matchHistoryRow(entry)
-				if index < report.matches.count - 1 {
-					Divider()
-						.opacity(0.25)
-				}
-			}
-			
+		let bestID = report.bestMatch?.id
+		let orderedMatches: [MapRatingMatchEntry] = {
+			guard let best = report.bestMatch else { return report.matches }
+			let others = report.matches.filter { $0.id != best.id }
+			return [best] + others
+		}()
+		
+		return VStack(alignment: .leading, spacing: 12) {
 			HStack {
+				Label("Match History", systemImage: "list.bullet.rectangle")
+					.font(.subheadline.weight(.bold))
 				Spacer()
-				Text("TOTAL MATCHES: \(report.totalMatches) (+\(report.actMatches) THIS ACT)")
-					.font(.system(size: 10, weight: .bold))
-					.foregroundStyle(.secondary)
+				Text("\(report.totalMatches) match\(report.totalMatches == 1 ? "" : "es") (+\(report.actMatches) this Act)")
+					.font(.caption2.weight(.semibold))
 					.monospacedDigit()
-				Spacer()
+					.foregroundStyle(.secondary)
+					.padding(.horizontal, 8)
+					.padding(.vertical, 4)
+					.background(Color.tertiaryGroupedBackground, in: Capsule())
 			}
-			.padding(.vertical, 10)
-			.background(Color.tertiaryGroupedBackground.opacity(0.6))
+			
+			VStack(spacing: 10) {
+				ForEach(orderedMatches) { entry in
+					matchHistoryRow(entry, isBestOfAct: entry.id == bestID)
+				}
+			}
 		}
+		.padding(14)
 		.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-		.clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 	}
 	
-	private func matchHistoryRow(_ entry: MapRatingMatchEntry) -> some View {
+	private func matchHistoryRow(_ entry: MapRatingMatchEntry, isBestOfAct: Bool) -> some View {
+		let accentBarColor: Color = entry.won
+			? Color(red: 0.25, green: 0.87, blue: 0.69)
+			: (entry.tied ? .secondary : Color(red: 0.96, green: 0.36, blue: 0.38))
 		let rowTint: Color = entry.won
-			? Color(red: 0.13, green: 0.36, blue: 0.31).opacity(0.55)
+			? Color(red: 0.13, green: 0.36, blue: 0.31).opacity(0.32)
 			: (entry.tied
-			   ? Color.secondary.opacity(0.14)
-			   : Color(red: 0.42, green: 0.14, blue: 0.17).opacity(0.50))
+			   ? Color.tertiaryGroupedBackground
+			   : Color(red: 0.42, green: 0.14, blue: 0.17).opacity(0.32))
 		let deltaText = entry.ratingDelta >= 0 ? "+\(entry.ratingDelta)" : "\(entry.ratingDelta)"
-		let deltaColor: Color = entry.ratingDelta >= 0 ? Color(red: 0.25, green: 0.87, blue: 0.69) : Color(red: 0.96, green: 0.36, blue: 0.38)
+		let deltaColor: Color = entry.ratingDelta >= 0
+			? Color(red: 0.25, green: 0.87, blue: 0.69)
+			: Color(red: 0.96, green: 0.36, blue: 0.38)
 		
 		return NavigationLink {
 			MatchDetailsContainer(matchID: entry.id, userID: userID)
 		} label: {
-			HStack(spacing: 8) {
-				if let agentID = entry.agentID {
-					AgentImage.icon(agentID, outlineRadius: 1)
-						.frame(width: 34, height: 34)
-						.clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-				} else {
-					RoundedRectangle(cornerRadius: 6, style: .continuous)
-						.fill(Color.tertiaryGroupedBackground)
-						.frame(width: 34, height: 34)
-				}
-				
-				VStack(alignment: .leading, spacing: 1) {
-					HStack(spacing: 4) {
-						Text("\(entry.ratingAfter)")
-							.font(.subheadline.weight(.bold))
-							.foregroundStyle(.primary)
-						Text("(\(deltaText))")
-							.font(.caption.weight(.semibold))
-							.foregroundStyle(deltaColor)
+			VStack(alignment: .leading, spacing: 10) {
+				if isBestOfAct {
+					HStack(spacing: 5) {
+						Image(systemName: "star.fill")
+							.font(.system(size: 9, weight: .bold))
+						Text("BEST MATCH OF THE ACT")
+							.font(.system(size: 10, weight: .black))
+							.tracking(0.5)
+						Spacer()
 					}
-					.monospacedDigit()
-					
-					Text("\(entry.scoreText) · \(entry.kdaText)")
-						.font(.system(size: 10))
-						.foregroundStyle(.secondary)
-						.monospacedDigit()
+					.foregroundStyle(Color(red: 0.98, green: 0.78, blue: 0.28))
 				}
-				.frame(maxWidth: .infinity, alignment: .leading)
 				
-				Text("\(entry.performanceScore)")
-					.font(.subheadline.weight(.semibold))
-					.monospacedDigit()
-					.frame(width: 48, alignment: .trailing)
+				HStack(spacing: 10) {
+					if let agentID = entry.agentID {
+						AgentImage.icon(agentID, outlineRadius: 1)
+							.frame(width: 40, height: 40)
+							.clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+					} else {
+						RoundedRectangle(cornerRadius: 9, style: .continuous)
+							.fill(Color.secondaryGroupedBackground)
+							.frame(width: 40, height: 40)
+					}
+					
+					VStack(alignment: .leading, spacing: 3) {
+						HStack(spacing: 6) {
+							Text("\(entry.ratingAfter)")
+								.font(.title3.weight(.bold))
+								.foregroundStyle(.primary)
+								.monospacedDigit()
+							
+							Text(deltaText)
+								.font(.caption.weight(.bold))
+								.monospacedDigit()
+								.foregroundStyle(deltaColor)
+								.padding(.horizontal, 6)
+								.padding(.vertical, 2)
+								.background(deltaColor.opacity(0.16), in: Capsule())
+						}
+						
+						Text("\(entry.scoreText) · \(entry.kdaText) · \(entry.matchStart.formatted(.dateTime.day().month(.abbreviated)))")
+							.font(.caption)
+							.foregroundStyle(.secondary)
+							.monospacedDigit()
+							.lineLimit(1)
+					}
+					
+					Spacer(minLength: 4)
+					
+					Image(systemName: "chevron.right")
+						.font(.caption.weight(.semibold))
+						.foregroundStyle(.tertiary)
+				}
 				
-				Text("\(Int((entry.attackWinRate * 100).rounded()))%")
-					.font(.subheadline.weight(.semibold))
-					.monospacedDigit()
-					.frame(width: 48, alignment: .trailing)
-				
-				Text("\(Int((entry.defenseWinRate * 100).rounded()))%")
-					.font(.subheadline.weight(.semibold))
-					.monospacedDigit()
-					.frame(width: 48, alignment: .trailing)
+				HStack(spacing: 8) {
+					matchStatChip(label: "PERF.", value: "\(entry.performanceScore)")
+					matchStatChip(label: "ATK", value: "\(Int((entry.attackWinRate * 100).rounded()))%")
+					matchStatChip(label: "DEF", value: "\(Int((entry.defenseWinRate * 100).rounded()))%")
+				}
 			}
-			.padding(.horizontal, 12)
-			.padding(.vertical, 8)
-			.background(rowTint)
-			.contentShape(Rectangle())
+			.padding(12)
+			.padding(.leading, 4)
+			.background {
+				RoundedRectangle(cornerRadius: 14, style: .continuous)
+					.fill(rowTint)
+					.overlay(alignment: .leading) {
+						Rectangle()
+							.fill(accentBarColor)
+							.frame(width: 4)
+					}
+					.overlay(
+						RoundedRectangle(cornerRadius: 14, style: .continuous)
+							.strokeBorder(
+								isBestOfAct
+								? Color(red: 0.90, green: 0.72, blue: 0.28).opacity(0.45)
+								: Color.white.opacity(0.06),
+								lineWidth: 1
+							)
+					)
+					.clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+			}
+			.contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 		}
 		.buttonStyle(.plain)
+	}
+	
+	private func matchStatChip(label: String, value: String) -> some View {
+		HStack(spacing: 4) {
+			Text(label)
+				.font(.system(size: 10, weight: .bold))
+				.foregroundStyle(.secondary)
+			Spacer(minLength: 2)
+			Text(value)
+				.font(.caption.weight(.bold))
+				.monospacedDigit()
+				.foregroundStyle(.primary)
+		}
+		.padding(.horizontal, 9)
+		.padding(.vertical, 6)
+		.frame(maxWidth: .infinity)
+		.background(Color.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 	}
 	
 	private func unplayedMapCard(_ report: MapRatingReport) -> some View {
@@ -1320,6 +1353,8 @@ struct MapRatingsView: View {
 					try? await client.fetchMatchDetails(for: matchID)
 					if let details = LocalDataProvider.shared.matchDetailsManager.loadedObject(for: matchID) {
 						loadedDetails[matchID] = details
+					} else {
+						unavailableSyncIDs.insert(matchID)
 					}
 					syncedProgress = (idx + 1, toFetch.count)
 				}
