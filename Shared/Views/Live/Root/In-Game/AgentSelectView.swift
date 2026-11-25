@@ -5,11 +5,30 @@ struct AgentSelectView: View {
 	let userID: User.ID
 	let inventory: Inventory
 	@State var pregameInfo: LivePregameInfo
+	var party: Party? = nil
 	@State var hasEnded = false
+	@State private var showingLiveChat = false
 	
 	@Environment(\.valorantLoad) private var load
 	@Environment(\.dismiss) private var dismiss
 	@Environment(\.scenePhase) private var scenePhase
+	
+	private var chatChannels: [LiveChatChannel] {
+		var channels: [LiveChatChannel] = []
+		if let teamRoom = pregameInfo.mucName, !teamRoom.isEmpty {
+			channels.append(.team(roomJID: teamRoom, matchID: pregameInfo.id, isPregame: true))
+		}
+		if let party, let partyRoom = party.mucName, !partyRoom.isEmpty {
+			channels.append(.party(roomJID: partyRoom, partyID: party.id))
+		}
+		return channels
+	}
+	
+	private var playerAgentsByID: [Player.ID: Agent.ID] {
+		Dictionary(uniqueKeysWithValues: pregameInfo.team.players.compactMap { player in
+			player.agentID.map { (player.id, $0) }
+		})
+	}
 	
 	var body: some View {
 		ScrollView {
@@ -62,6 +81,25 @@ struct AgentSelectView: View {
 		.overlay(alignment: .top) { infoBox }
 		.navigationTitle("Agent Select")
 		.navigationBarTitleDisplayMode(.inline)
+		.toolbar {
+			ToolbarItem(placement: .navigationBarTrailing) {
+				if !chatChannels.isEmpty {
+					Button {
+						showingLiveChat = true
+					} label: {
+						Label("Live Chat", systemImage: "bubble.left.and.bubble.right.fill")
+					}
+				}
+			}
+		}
+		.sheet(isPresented: $showingLiveChat) {
+			LiveGameChatView(
+				channels: chatChannels,
+				userID: userID,
+				playerAgents: playerAgentsByID,
+				allyPlayerIDs: Set(pregameInfo.team.players.map(\.id))
+			)
+		}
 		.task(id: scenePhase) {
 			guard scenePhase == .active, !hasEnded, pregameInfo.state != .provisioned else { return }
 			while !Task.isCancelled, !hasEnded, pregameInfo.state != .provisioned {

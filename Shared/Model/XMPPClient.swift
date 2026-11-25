@@ -184,6 +184,16 @@ struct XMPPChatMessage: Identifiable, Equatable, Codable, Sendable {
 	var timestamp: Date
 }
 
+struct XMPPMUCMessage: Identifiable, Equatable, Codable, Sendable {
+	var id: String
+	var roomJID: String
+	var senderPUUID: User.ID?
+	var senderNick: String
+	var body: String
+	var isOutgoing: Bool
+	var timestamp: Date
+}
+
 enum XMPPEvent {
 	case connected(myJID: String)
 	case disconnected(Error?)
@@ -191,6 +201,9 @@ enum XMPPEvent {
 	case presenceUpdated(XMPPPresenceUpdate)
 	case messageReceived(XMPPChatMessage)
 	case archiveReceived(peerJID: String, messages: [XMPPChatMessage])
+	case mucJoined(roomJID: String)
+	case mucError(roomJID: String, message: String)
+	case mucMessageReceived(XMPPMUCMessage)
 }
 
 private final class ContinuationBox<Value: Sendable>: @unchecked Sendable {
@@ -472,6 +485,36 @@ actor XMPPClient {
 		let bare = jid.components(separatedBy: "/").first ?? jid
 		let msgID = id ?? "msg_\(UUID().uuidString.prefix(8))"
 		let xml = "<message id=\"\(escapeXML(msgID))\" to=\"\(escapeXML(bare))\" type=\"chat\"><body>\(escapeXML(body))</body></message>"
+		try await sendRaw(xml)
+		return msgID
+	}
+	
+	func joinMUCRoom(roomJID: String, token: String?) async throws {
+		guard isRunning else { throw XMPPError.notConnected }
+		let bareRoom = (roomJID.components(separatedBy: "/").first ?? roomJID).lowercased()
+		let nick = myJID.components(separatedBy: "/").first ?? myJID
+		let reqID = "muc_join_\(UUID().uuidString.prefix(8))"
+		let passwordXML = (token.map { !$0.isEmpty } == true)
+			? "<password>\(escapeXML(token!))</password>"
+			: ""
+		let xml = "<presence id=\"\(reqID)\" to=\"\(escapeXML(bareRoom))/\(escapeXML(nick))\"><x xmlns=\"http://jabber.org/protocol/muc\"><history maxstanzas=\"50\"/>\(passwordXML)</x></presence>"
+		try await sendRaw(xml)
+	}
+	
+	func leaveMUCRoom(roomJID: String) async throws {
+		guard isRunning else { throw XMPPError.notConnected }
+		let bareRoom = (roomJID.components(separatedBy: "/").first ?? roomJID).lowercased()
+		let nick = myJID.components(separatedBy: "/").first ?? myJID
+		let reqID = "muc_leave_\(UUID().uuidString.prefix(8))"
+		let xml = "<presence id=\"\(reqID)\" to=\"\(escapeXML(bareRoom))/\(escapeXML(nick))\" type=\"unavailable\"/>"
+		try await sendRaw(xml)
+	}
+	
+	func sendMUCMessage(to roomJID: String, body: String, id: String? = nil) async throws -> String {
+		guard isRunning else { throw XMPPError.notConnected }
+		let bareRoom = (roomJID.components(separatedBy: "/").first ?? roomJID).lowercased()
+		let msgID = id ?? "muc_\(UUID().uuidString.prefix(8))"
+		let xml = "<message id=\"\(escapeXML(msgID))\" to=\"\(escapeXML(bareRoom))\" type=\"groupchat\"><body>\(escapeXML(body))</body></message>"
 		try await sendRaw(xml)
 		return msgID
 	}
@@ -862,11 +905,23 @@ actor XMPPClient {
 				}
 			}
 		} else if stanza.hasPrefix("<presence") {
-			if let event = parsePresence(from: stanza) {
+			let rawFrom = extractAttribute("from", from: stanza) ?? ""
+			let bareFrom = rawFrom.components(separatedBy: "/").first ?? rawFrom
+			if isMUCJID(bareFrom) || stanza.contains("jabber.org/protocol/muc#user") {
+				if let mucEvent = parseMUCPresence(from: stanza) {
+					await eventHandler?(mucEvent)
+				}
+			} else if let event = parsePresence(from: stanza) {
 				await eventHandler?(event)
 			}
 		} else if stanza.hasPrefix("<message") {
-			if let msg = parseIncomingMessage(from: stanza) {
+			let msgType = extractAttribute("type", from: stanza)?.lowercased()
+			let rawFrom = extractAttribute("from", from: stanza) ?? ""
+			if msgType == "groupchat" || isMUCJID(rawFrom) {
+				if let mucMsg = parseIncomingMUCMessage(from: stanza) {
+					await eventHandler?(.mucMessageReceived(mucMsg))
+				}
+			} else if let msg = parseIncomingMessage(from: stanza) {
 				await eventHandler?(.messageReceived(msg))
 			}
 		}
@@ -1155,6 +1210,94 @@ actor XMPPClient {
 		default:
 			return (fallback, stTime)
 		}
+	}
+	
+	private func isMUCJID(_ jid: String) -> Bool {
+		let bare = (jid.components(separatedBy: "/").first ?? jid).lowercased()
+		guard let at = bare.firstIndex(of: "@") else { return false }
+		let domain = bare[bare.index(after: at)...]
+		return domain.hasPrefix("ares-")
+			|| domain.contains(".muc.")
+			|| domain.hasPrefix("muc.")
+			|| domain.hasPrefix("conference.")
+	}
+	
+	private func isSelfMUCNick(_ occupantNick: String) -> Bool {
+		let myBare = (myJID.components(separatedBy: "/").first ?? myJID).lowercased()
+		let myNode = myBare.split(separator: "@").first.map(String.init) ?? ""
+		let lowerNick = occupantNick.lowercased()
+		let nickNode = lowerNick.split(separator: "@").first.map(String.init) ?? ""
+		if !myBare.isEmpty && lowerNick == myBare { return true }
+		if !myNode.isEmpty && nickNode == myNode { return true }
+		return false
+	}
+	
+	private func parseMUCPresence(from xml: String) -> XMPPEvent? {
+		guard let rawFrom = extractAttribute("from", from: xml) else { return nil }
+		let parts = rawFrom.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+		let bareRoom = String(parts.first ?? Substring(rawFrom)).lowercased()
+		let occupantNick = parts.count > 1 ? String(parts[1]) : ""
+		let typeAttr = extractAttribute("type", from: xml)?.lowercased()
+		
+		if typeAttr == "error" {
+			let errorText = extractTagContent(from: xml, tag: "text").map(unescapeXML)
+				?? extractNestedAttribute("error", attr: "code", from: xml)
+				?? "Unable to join live chat room."
+			return .mucError(roomJID: bareRoom, message: errorText)
+		}
+		if typeAttr == "unavailable" {
+			return nil
+		}
+		let isSelfCode = xml.contains("code=\"110\"") || xml.contains("code='110'")
+		if isSelfCode || isSelfMUCNick(occupantNick) {
+			return .mucJoined(roomJID: bareRoom)
+		}
+		return nil
+	}
+	
+	private func parseIncomingMUCMessage(from xml: String) -> XMPPMUCMessage? {
+		guard let rawBody = extractTagContent(from: xml, tag: "body") else { return nil }
+		let body = unescapeXML(rawBody)
+		guard !body.isEmpty else { return nil }
+		
+		let rawFrom = extractAttribute("from", from: xml) ?? ""
+		let parts = rawFrom.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+		let bareRoom = String(parts.first ?? Substring(rawFrom)).lowercased()
+		guard !bareRoom.isEmpty else { return nil }
+		
+		let occupantNick = parts.count > 1 ? String(parts[1]) : ""
+		let itemJID = extractNestedAttribute("item", attr: "jid", from: xml)
+		let puuidCandidate = occupantNick.split(separator: "@").first.map(String.init)
+			?? itemJID?.split(separator: "@").first.map(String.init)
+		let senderPUUID = puuidCandidate.flatMap(User.ID.init)
+		
+		let stamp = extractNestedAttribute("delay", attr: "stamp", from: xml)
+			?? extractAttribute("stamp", from: xml)
+		let timestamp = stamp.flatMap { parseRiotTimestamp($0) } ?? Date()
+		
+		let myNode = myJID.split(separator: "@").first?.lowercased()
+		let isOutgoing = (senderPUUID?.description.lowercased() == myNode && myNode != nil)
+			|| isSelfMUCNick(occupantNick)
+		
+		let rawID = extractNestedAttribute("message", attr: "id", from: xml)
+			?? extractAttribute("id", from: xml)
+		let id: String
+		if let rawID, !rawID.isEmpty {
+			id = rawID
+		} else {
+			let ms = Int64((timestamp.timeIntervalSince1970 * Double(1000)).rounded())
+			id = "muc:\(bareRoom):\(ms):\(Self.stableHashHex("\(occupantNick):\(body)"))"
+		}
+		
+		return XMPPMUCMessage(
+			id: id,
+			roomJID: bareRoom,
+			senderPUUID: senderPUUID,
+			senderNick: occupantNick,
+			body: body,
+			isOutgoing: isOutgoing,
+			timestamp: timestamp
+		)
 	}
 	
 	private func parseIncomingMessage(from xml: String, expectedPeerJID: String? = nil) -> XMPPChatMessage? {

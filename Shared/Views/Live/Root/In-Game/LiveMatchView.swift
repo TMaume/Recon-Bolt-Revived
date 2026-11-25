@@ -5,17 +5,101 @@ import ValorantAPI
 struct LiveMatchView: View {
 	let gameInfo: LiveGameInfo
 	let userID: User.ID
+	var party: Party? = nil
+	
+	@State private var showingLiveChat = false
+	
+	private var chatChannels: [LiveChatChannel] {
+		var channels: [LiveChatChannel] = []
+		if let teamRoom = gameInfo.teamMUCName, !teamRoom.isEmpty {
+			channels.append(.team(roomJID: teamRoom, matchID: gameInfo.id, isPregame: false))
+		}
+		if let allRoom = gameInfo.allMUCName, !allRoom.isEmpty {
+			channels.append(.all(roomJID: allRoom, matchID: gameInfo.id))
+		}
+		if let party, let partyRoom = party.mucName, !partyRoom.isEmpty {
+			channels.append(.party(roomJID: partyRoom, partyID: party.id))
+		}
+		return channels
+	}
+	
+	private var playerAgentsByID: [Player.ID: Agent.ID] {
+		Dictionary(uniqueKeysWithValues: gameInfo.players.compactMap { player in
+			player.agentID.map { (player.id, $0) }
+		})
+	}
+	
+	private var allyIDs: Set<Player.ID> {
+		guard let ownTeam = gameInfo.players.firstElement(withID: userID)?.teamID else {
+			return [userID]
+		}
+		return Set(gameInfo.players.filter { $0.teamID == ownTeam }.map(\.id))
+	}
 	
 	var body: some View {
 		ScrollView {
 			VStack(spacing: 0) {
 				hero
 				
+				if !chatChannels.isEmpty {
+					liveChatBannerButton
+						.padding(.horizontal)
+						.padding(.top, 14)
+				}
+				
 				playerList
 			}
 		}
 		.navigationTitle("Live Match")
 		.navigationBarTitleDisplayMode(.inline)
+		.toolbar {
+			ToolbarItem(placement: .navigationBarTrailing) {
+				if !chatChannels.isEmpty {
+					Button {
+						showingLiveChat = true
+					} label: {
+						Label("Live Chat", systemImage: "bubble.left.and.bubble.right.fill")
+					}
+				}
+			}
+		}
+		.sheet(isPresented: $showingLiveChat) {
+			LiveGameChatView(
+				channels: chatChannels,
+				userID: userID,
+				playerAgents: playerAgentsByID,
+				allyPlayerIDs: allyIDs
+			)
+		}
+	}
+	
+	private var liveChatBannerButton: some View {
+		Button {
+			showingLiveChat = true
+		} label: {
+			HStack(spacing: 10) {
+				Image(systemName: "bubble.left.and.bubble.right.fill")
+					.foregroundStyle(Color.accentColor)
+				VStack(alignment: .leading, spacing: 1) {
+					Text("Live Match Chat")
+						.font(.subheadline.weight(.semibold))
+						.foregroundStyle(.primary)
+					Text("Team & All chat via Riot XMPP")
+						.font(.caption)
+						.foregroundStyle(.secondary)
+				}
+				Spacer()
+				Image(systemName: "chevron.right")
+					.font(.caption.weight(.semibold))
+					.foregroundStyle(.tertiary)
+			}
+			.padding(12)
+			.background(
+				Color.secondaryGroupedBackground,
+				in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+			)
+		}
+		.buttonStyle(.plain)
 	}
 	
 	@ViewBuilder

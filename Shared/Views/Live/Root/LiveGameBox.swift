@@ -10,6 +10,10 @@ struct LiveGameBox: View {
 	@State var activeMatch: ActiveMatch?
 	@State var shownMatch: ActiveMatch?
 	@State private var isActiveMatchShootingRange = false
+	@State private var activeChatChannels: [LiveChatChannel] = []
+	@State private var activeChatAgents: [Player.ID: Agent.ID] = [:]
+	@State private var activeChatAllies: Set<Player.ID> = []
+	@State private var showingLiveChat = false
 	
 	@Binding var isExpanded: Bool
 	
@@ -125,10 +129,35 @@ struct LiveGameBox: View {
 					.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 				}
 				.buttonStyle(.plain)
+				
+				if !isActiveMatchShootingRange && !activeChatChannels.isEmpty {
+					Button {
+						showingLiveChat = true
+					} label: {
+						HStack(spacing: 8) {
+							Image(systemName: "bubble.left.and.bubble.right.fill")
+							Text("Live Chat")
+						}
+						.font(.subheadline.weight(.semibold))
+						.foregroundStyle(Color.valorantBlue)
+						.frame(maxWidth: .infinity)
+						.padding(.vertical, 10)
+						.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+					}
+					.buttonStyle(.plain)
+				}
 			}
 			.frame(maxWidth: .infinity)
 			.padding(14)
 			.background(Color.tertiaryGroupedBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+			.sheet(isPresented: $showingLiveChat) {
+				LiveGameChatView(
+					channels: activeChatChannels,
+					userID: userID,
+					playerAgents: activeChatAgents,
+					allyPlayerIDs: activeChatAllies
+				)
+			}
 		} else if party != nil {
 			PartyInfoBox(
 				userID: userID,
@@ -167,20 +196,59 @@ struct LiveGameBox: View {
 		if let fetched {
 			if fetched.id != activeMatch?.id {
 				isActiveMatchShootingRange = false
+				activeChatChannels = []
+				activeChatAgents = [:]
+				activeChatAllies = []
 			}
-			if !isActiveMatchShootingRange {
-				if fetched.inPregame,
-				   let info = try? await client.getLivePregameInfo(fetched.id),
-				   info.isShootingRange {
+			if fetched.inPregame,
+			   let info = try? await client.getLivePregameInfo(fetched.id) {
+				if info.isShootingRange {
 					isActiveMatchShootingRange = true
-				} else if !fetched.inPregame,
-						  let info = try? await client.getLiveGameInfo(fetched.id),
-						  info.isShootingRange {
+					activeChatChannels = []
+				} else {
+					var channels: [LiveChatChannel] = []
+					if let teamRoom = info.mucName, !teamRoom.isEmpty {
+						channels.append(.team(roomJID: teamRoom, matchID: info.id, isPregame: true))
+					}
+					if let party, let partyRoom = party.mucName, !partyRoom.isEmpty {
+						channels.append(.party(roomJID: partyRoom, partyID: party.id))
+					}
+					activeChatChannels = channels
+					activeChatAgents = Dictionary(uniqueKeysWithValues: info.team.players.compactMap { player in
+						player.agentID.map { (player.id, $0) }
+					})
+					activeChatAllies = Set(info.team.players.map(\.id))
+				}
+			} else if !fetched.inPregame,
+					  let info = try? await client.getLiveGameInfo(fetched.id) {
+				if info.isShootingRange {
 					isActiveMatchShootingRange = true
+					activeChatChannels = []
+				} else {
+					var channels: [LiveChatChannel] = []
+					if let teamRoom = info.teamMUCName, !teamRoom.isEmpty {
+						channels.append(.team(roomJID: teamRoom, matchID: info.id, isPregame: false))
+					}
+					if let allRoom = info.allMUCName, !allRoom.isEmpty {
+						channels.append(.all(roomJID: allRoom, matchID: info.id))
+					}
+					if let party, let partyRoom = party.mucName, !partyRoom.isEmpty {
+						channels.append(.party(roomJID: partyRoom, partyID: party.id))
+					}
+					activeChatChannels = channels
+					activeChatAgents = Dictionary(uniqueKeysWithValues: info.players.compactMap { player in
+						player.agentID.map { (player.id, $0) }
+					})
+					if let ownTeam = info.players.firstElement(withID: userID)?.teamID {
+						activeChatAllies = Set(info.players.filter { $0.teamID == ownTeam }.map(\.id))
+					}
 				}
 			}
 		} else {
 			isActiveMatchShootingRange = false
+			activeChatChannels = []
+			activeChatAgents = [:]
+			activeChatAllies = []
 		}
 		activeMatch = fetched
 	}

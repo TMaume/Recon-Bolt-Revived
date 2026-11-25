@@ -73,11 +73,12 @@ struct LiveGameContainer: View {
 			AgentSelectView(
 				userID: userID,
 				inventory: inventory,
-				pregameInfo: pregameInfo
+				pregameInfo: pregameInfo,
+				party: party
 			)
 			.id(pregameInfo.id)
 		case .liveGame(let liveGameInfo)?:
-			LiveMatchView(gameInfo: liveGameInfo, userID: userID)
+			LiveMatchView(gameInfo: liveGameInfo, userID: userID, party: party)
 		case nil:
 			ProgressView()
 		}
