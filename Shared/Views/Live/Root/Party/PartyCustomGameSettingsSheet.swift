@@ -45,35 +45,39 @@ struct PartyCustomGameSettingsSheet: View {
 		}
 	}
 	
+	private var currentModeCategory: CustomGameConfigs.ModeCategory {
+		CustomGameConfigs.ModeCategory(modePath: settings.mode)
+	}
+	
 	private var selectableMapPaths: [String] {
+		let category = currentModeCategory
 		var paths: [String] = []
-		if let enabled = configs?.enabledMaps, !enabled.isEmpty {
-			paths = enabled.filter { path in
-				let lower = path.lowercased()
-				return !lower.contains("range") && !lower.contains("poveglia") && !lower.contains("npe")
-			}
-		} else if let assetMaps = assets?.maps.values {
-			paths = assetMaps
-				.filter { map in
-					if map.id == .range || map.id == .rangeV2 || map.id == .gauntlet { return false }
-					let raw = map.id.rawValue.lowercased()
-					return !(map.callouts ?? []).isEmpty
-						&& !raw.contains("skirmish")
-						&& !raw.contains("hurm")
-						&& !raw.contains("npe")
-				}
-				.map(\.id.rawValue)
+		
+		if let configs, !configs.enabledMaps.isEmpty {
+			paths = configs.validMaps(forMode: settings.mode)
 		}
-		if !settings.map.isEmpty && !paths.contains(settings.map) {
+		
+		if paths.isEmpty, let assetMaps = assets?.maps.values {
+			paths = assetMaps
+				.map(\.id.rawValue)
+				.filter { category.accepts(mapPath: $0) }
+		}
+		
+		if paths.isEmpty, let configs, !configs.enabledMaps.isEmpty {
+			paths = configs.enabledMaps
+		}
+		
+		if !settings.map.isEmpty,
+		   !paths.contains(where: { $0.caseInsensitiveCompare(settings.map) == .orderedSame }) {
 			paths.insert(settings.map, at: 0)
 		}
+		
 		return paths.sorted { mapDisplayName($0) < mapDisplayName($1) }
 	}
 	
 	private static let fallbackModes: [String] = [
 		"/Game/GameModes/Bomb/BombGameMode.BombGameMode_C",
 		"/Game/GameModes/QuickBomb/QuickBombGameMode.QuickBombGameMode_C",
-		"/Game/GameModes/_Development/Swiftplay_EndOfRoundCredits/SwiftPlay_GameMode_PrimaryAsset",
 		"/Game/GameModes/Deathmatch/DeathmatchGameMode.DeathmatchGameMode_C",
 		"/Game/GameModes/GunGame/GunGameTeamsGameMode.GunGameTeamsGameMode_C",
 		"/Game/GameModes/HURM/HURM.HURM_C",
@@ -131,14 +135,23 @@ struct PartyCustomGameSettingsSheet: View {
 				}
 			}
 			.valorantLoadTask { client in
-				configs = try? await client.getCustomGameConfigs()
+				do {
+					let fetched = try await client.getCustomGameConfigs()
+					configs = fetched
+					print("[CustomGame] enabledMaps:", fetched.enabledMaps)
+					print("[CustomGame] enabledModes:", fetched.enabledModes)
+					ensureValidMapForCurrentMode()
+				} catch {
+					print("[CustomGame] getCustomGameConfigs ERROR:", error)
+				}
 			}
 		}
 	}
 	
 	private var mapPreviewCard: some View {
-		let mapID = MapID(settings.map.isEmpty ? MapID.ascent.rawValue : settings.map)
-		return ZStack(alignment: .bottomLeading) {
+		let mapID = resolvedMapInfo(for: settings.map)?.id
+			?? MapID(settings.map.isEmpty ? MapID.ascent.rawValue : settings.map)
+			return ZStack(alignment: .bottomLeading) {
 			MapImage.splash(mapID)
 				.aspectRatio(contentMode: .fill)
 				.frame(height: 120)
@@ -182,6 +195,7 @@ struct PartyCustomGameSettingsSheet: View {
 				
 				Spacer()
 				
+				// Menu Map
 				Menu {
 					ForEach(selectableMapPaths, id: \.self) { mapPath in
 						Button {
@@ -219,10 +233,12 @@ struct PartyCustomGameSettingsSheet: View {
 				
 				Spacer()
 				
+				// Menu Mode
 				Menu {
 					ForEach(selectableModePaths, id: \.self) { modePath in
 						Button {
 							settings.mode = modePath
+							ensureValidMapForCurrentMode()
 						} label: {
 							HStack {
 								Text(modeDisplayName(modePath))
@@ -346,10 +362,17 @@ struct PartyCustomGameSettingsSheet: View {
 		.disabled(!canEdit)
 	}
 	
+	private func resolvedMapInfo(for path: String) -> MapInfo? {
+		guard !path.isEmpty, let maps = assets?.maps else { return nil }
+		if let direct = maps[MapID(path)] {
+			return direct
+		}
+		return maps.values.first { $0.id.rawValue.caseInsensitiveCompare(path) == .orderedSame }
+	}
+	
 	private func mapDisplayName(_ path: String) -> String {
 		guard !path.isEmpty else { return String(localized: "Select Map") }
-		let id = MapID(path)
-		if let info = assets?.maps[id] {
+		if let info = resolvedMapInfo(for: path) {
 			return info.displayName
 		}
 		return path.split(separator: "/").last.map(String.init) ?? path
@@ -378,20 +401,48 @@ struct PartyCustomGameSettingsSheet: View {
 			?? MatchAnalytics.parseServerName(from: podID)
 			?? podID
 	}
+
+	private func ensureValidMapForCurrentMode() {
+		let validMaps = selectableMapPaths
+		guard !validMaps.isEmpty else { return }
+		if !validMaps.contains(where: { $0.caseInsensitiveCompare(settings.map) == .orderedSame }) {
+			settings.map = validMaps[0]
+		} else if let exactMatch = validMaps.first(where: { $0.caseInsensitiveCompare(settings.map) == .orderedSame }) {
+			settings.map = exactMatch
+		}
+	}
 	
 	private func saveSettings() {
 		var updated = settings
 		updated.gameRules = rules
-		if updated.map.isEmpty {
-			updated.map = selectableMapPaths.first ?? MapID.ascent.rawValue
-		}
+		
 		if updated.mode.isEmpty {
-			updated.mode = Self.fallbackModes[0]
-		}
-		if updated.gamePod.isEmpty, let bestPod = selfPings.first?.serverID {
-			updated.gamePod = bestPod
+			updated.mode = selectableModePaths.first ?? Self.fallbackModes[0]
 		}
 		
+		let validMaps = selectableMapPaths
+		if let exactMap = validMaps.first(where: { $0.caseInsensitiveCompare(updated.map) == .orderedSame }) {
+			updated.map = exactMap
+		} else if let firstValid = validMaps.first {
+			updated.map = firstValid
+		} else if updated.map.isEmpty {
+			updated.map = MapID.ascent.rawValue
+		}
+		
+		if updated.gamePod.isEmpty {
+			updated.gamePod = selfPings.first?.serverID
+				?? party.matchmakingData.preferredGamePods.first
+				?? ""
+		}
+
+		print("[CustomGame] Sending -> Map: \(updated.map) | Mode: \(updated.mode) | Pod: \(updated.gamePod)")
+		print("[CustomGame] Configs -> Maps: \(configs?.enabledMaps.count ?? -1) | Modes: \(configs?.enabledModes.count ?? -1)")
+		
+		if let data = try? JSONEncoder().encode(updated),
+		let json = String(data: data, encoding: .utf8) {
+			print("[CustomGame] POST payload:", json)
+		}
+
 		Task {
 			isSaving = true
 			defer { isSaving = false }

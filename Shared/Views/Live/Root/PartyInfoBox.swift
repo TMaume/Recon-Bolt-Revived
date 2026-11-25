@@ -12,15 +12,15 @@ struct PartyInfoBox: View {
 	
 	@State private var showingSettings = false
 	@State private var showingCustomSettings = false
-	@State private var showingPartyChat = false
 	@State private var isTogglingAccessibility = false
 	@State private var optimisticAccessibility: Party.Accessibility?
-	@State private var isStartingRange = false
 	@State private var isRunningCustomAction = false
 	@State private var isExitingCustomGame = false
 	@State private var selectedProfileMemberID: Player.ID?
 	@State private var processingRequestID: String?
-	
+	@State private var isStartingRange = false
+
+
 	@Namespace private var accessibilityNamespace
 	@Environment(\.valorantLoad) private var load
 	@Environment(\.assets) private var assets
@@ -100,14 +100,6 @@ struct PartyInfoBox: View {
 				userID: userID,
 				onPartyChanged: onPartyChanged
 			)
-		}
-		.sheet(isPresented: $showingPartyChat) {
-			if let partyRoom = party.mucName, !partyRoom.isEmpty {
-				LiveGameChatView(
-					channels: [.party(roomJID: partyRoom, partyID: party.id)],
-					userID: userID
-				)
-			}
 		}
 		.onChange(of: party.accessibility) { _ in
 			if !isTogglingAccessibility {
@@ -357,9 +349,10 @@ struct PartyInfoBox: View {
 		}
 	}
 	
+	@ViewBuilder
 	private var customGameUtilityRow: some View {
-		HStack(spacing: 8) {
-			if isSelfOwner && party.state == .customGameSetup {
+		if isSelfOwner && party.state == .customGameSetup {
+			HStack(spacing: 8) {
 				Button {
 					balanceTeams()
 				} label: {
@@ -395,21 +388,6 @@ struct PartyInfoBox: View {
 				}
 				.buttonStyle(.plain)
 				.disabled(isRunningCustomAction)
-			}
-			
-			if let partyRoom = party.mucName, !partyRoom.isEmpty {
-				Button {
-					showingPartyChat = true
-				} label: {
-					Label("Chat", systemImage: "bubble.left.and.bubble.right")
-						.font(.caption.weight(.semibold))
-						.frame(maxWidth: isSelfOwner ? nil : .infinity)
-						.padding(.horizontal, 12)
-						.padding(.vertical, 9)
-						.background(Color.tertiaryGroupedBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-						.foregroundStyle(Color.valorantBlue)
-				}
-				.buttonStyle(.plain)
 			}
 		}
 	}

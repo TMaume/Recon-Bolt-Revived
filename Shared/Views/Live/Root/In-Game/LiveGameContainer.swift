@@ -5,9 +5,7 @@ import HandyOperators
 struct LiveGameContainer: View {
 	var userID: User.ID
 	var playersInParty: Set<Player.ID>
-	var party: Party? = nil
 	@State var activeMatch: ActiveMatch?
-	var isShootingRangeHint: Bool = false
 	@State var details: Details?
 	
 	@State private var hasEnded = false
@@ -40,45 +38,15 @@ struct LiveGameContainer: View {
 	@ViewBuilder
 	var content: some View {
 		switch details {
-		case .shootingRangePregame(let pregameInfo, let inventory)?:
-			ShootingRangeView(
-				userID: userID,
-				inventory: inventory,
-				pregameInfo: pregameInfo,
-				liveGameInfo: nil,
-				onUpdatePregame: { updated in
-					details = .shootingRangePregame(updated, inventory)
-				},
-				onLeaveRange: {
-					hasEnded = true
-				},
-				onRestartRange: {
-					await refreshAfterRangeRestart()
-				}
-			)
-		case .shootingRangeLive(let liveGameInfo, let inventory)?:
-			ShootingRangeView(
-				userID: userID,
-				inventory: inventory,
-				pregameInfo: nil,
-				liveGameInfo: liveGameInfo,
-				onLeaveRange: {
-					hasEnded = true
-				},
-				onRestartRange: {
-					await refreshAfterRangeRestart()
-				}
-			)
 		case .pregame(let pregameInfo, let inventory)?:
 			AgentSelectView(
 				userID: userID,
 				inventory: inventory,
-				pregameInfo: pregameInfo,
-				party: party
+				pregameInfo: pregameInfo
 			)
 			.id(pregameInfo.id)
 		case .liveGame(let liveGameInfo)?:
-			LiveMatchView(gameInfo: liveGameInfo, userID: userID, party: party)
+			LiveMatchView(gameInfo: liveGameInfo, userID: userID)
 		case nil:
 			ProgressView()
 		}
@@ -89,21 +57,16 @@ struct LiveGameContainer: View {
 			guard let activeMatch else { return }
 			if activeMatch.inPregame {
 				async let inventory = $0.getInventory()
-				let pregameInfo = try await $0.getLivePregameInfo(activeMatch.id) <- LocalDataProvider.dataFetched
-				let loadedInventory = try await inventory
-				if pregameInfo.isShootingRange || isShootingRangeHint {
-					details = .shootingRangePregame(pregameInfo, loadedInventory)
-				} else {
-					details = .pregame(pregameInfo, loadedInventory)
-				}
+				details = .pregame(
+					try await $0.getLivePregameInfo(activeMatch.id)
+					<- LocalDataProvider.dataFetched,
+					try await inventory
+				)
 			} else {
-				let gameInfo = try await $0.getLiveGameInfo(activeMatch.id) <- LocalDataProvider.dataFetched
-				if gameInfo.isShootingRange || isShootingRangeHint {
-					let loadedInventory = try await $0.getInventory()
-					details = .shootingRangeLive(gameInfo, loadedInventory)
-				} else {
-					details = .liveGame(gameInfo)
-				}
+				details = .liveGame(
+					try await $0.getLiveGameInfo(activeMatch.id)
+					<- LocalDataProvider.dataFetched
+				)
 			}
 		}
 	}
@@ -120,33 +83,16 @@ struct LiveGameContainer: View {
 		}
 	}
 	
-	private func refreshAfterRangeRestart() async {
-		await load { client in
-			for _ in 0..<8 {
-				if let match = try await client.getActiveMatch() {
-					hasEnded = false
-					activeMatch = match
-					await fetchDetails()
-					return
-				}
-				try? await Task.sleep(for: .milliseconds(400))
-			}
-			await refreshActiveMatch()
-		}
-	}
-	
 	enum Details {
-		case shootingRangePregame(LivePregameInfo, Inventory)
-		case shootingRangeLive(LiveGameInfo, Inventory)
 		case pregame(LivePregameInfo, Inventory)
 		case liveGame(LiveGameInfo)
 		
 		var playerIDs: [Player.ID] {
 			switch self {
-			case .shootingRangePregame(let info, _), .pregame(let info, _):
-				return info.team.players.map(\.id)
-			case .shootingRangeLive(let info, _), .liveGame(let info):
-				return info.players.map(\.id)
+			case .pregame(let livePregameInfo, _):
+				return livePregameInfo.team.players.map(\.id)
+			case .liveGame(let liveGameInfo):
+				return liveGameInfo.players.map(\.id)
 			}
 		}
 	}

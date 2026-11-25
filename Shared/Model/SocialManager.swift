@@ -148,9 +148,6 @@ final class SocialManager: ObservableObject {
 	@Published var myPresence: XMPPPresenceUpdate?
 	@Published var lastSyncedAt: Date?
 	@Published var isRefreshing = false
-	@Published private(set) var mucMessagesByRoom: [String: [XMPPMUCMessage]] = [:]
-	@Published private(set) var joinedMUCRooms: Set<String> = []
-	@Published private(set) var mucErrorByRoom: [String: String] = [:]
 	
 	let onlineCountModel = SocialOnlineCount()
 	
@@ -178,7 +175,6 @@ final class SocialManager: ObservableObject {
 	private var refreshResetTask: Task<Void, Never>?
 	private var pendingPresenceUpdates: [XMPPPresenceUpdate] = []
 	private var presenceFlushTask: Task<Void, Never>?
-	private var activeMUCTokens: [String: String] = [:]
 	
 	private(set) var friends: [XMPPFriend] = []
 	private(set) var onlineCount: Int = 0
@@ -487,10 +483,6 @@ final class SocialManager: ObservableObject {
 		messagesByJID = [:]
 		changeEvents = []
 		unreadByJID = [:]
-		mucMessagesByRoom = [:]
-		joinedMUCRooms = []
-		mucErrorByRoom = [:]
-		activeMUCTokens = [:]
 		myJID = ""
 		myPresence = nil
 		lastSyncedAt = nil
@@ -520,83 +512,6 @@ final class SocialManager: ObservableObject {
 		)
 		appendMessage(message, for: target)
 		saveCacheNow()
-	}
-	
-	// MARK: - Live Match / Party MUC Chat
-	
-	var currentXMPPDomain: String {
-		let bare = myJID.components(separatedBy: "/").first ?? myJID
-		if let at = bare.firstIndex(of: "@") {
-			let domain = String(bare[bare.index(after: at)...])
-			if !domain.isEmpty { return domain }
-		}
-		return "eu1.pvp.net"
-	}
-	
-	func normalizeMUCRoomJID(_ raw: String, servicePrefix: String) -> String {
-		let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-		let bare = (trimmed.components(separatedBy: "/").first ?? trimmed).lowercased()
-		if bare.contains("@") {
-			return bare
-		}
-		return "\(bare)@\(servicePrefix).\(currentXMPPDomain)"
-	}
-	
-	func joinMUCRoom(_ roomJID: String, token: String?) async throws {
-		let bare = (roomJID.components(separatedBy: "/").first ?? roomJID).lowercased()
-		mucErrorByRoom[bare] = nil
-		activeMUCTokens[bare] = token ?? ""
-		try await client.joinMUCRoom(roomJID: bare, token: token)
-	}
-	
-	func leaveMUCRoom(_ roomJID: String) async {
-		let bare = (roomJID.components(separatedBy: "/").first ?? roomJID).lowercased()
-		activeMUCTokens.removeValue(forKey: bare)
-		joinedMUCRooms.remove(bare)
-		try? await client.leaveMUCRoom(roomJID: bare)
-	}
-	
-	func sendMUCMessage(_ body: String, to roomJID: String) async throws {
-		let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
-		guard !trimmed.isEmpty else { return }
-		let bare = (roomJID.components(separatedBy: "/").first ?? roomJID).lowercased()
-		let sentID = try await client.sendMUCMessage(to: bare, body: trimmed)
-		let message = XMPPMUCMessage(
-			id: sentID,
-			roomJID: bare,
-			senderPUUID: connectedUserID,
-			senderNick: myJID.components(separatedBy: "/").first ?? myJID,
-			body: trimmed,
-			isOutgoing: true,
-			timestamp: Date()
-		)
-		appendMUCMessage(message, for: bare)
-	}
-	
-	func clearMUCRoom(_ roomJID: String) {
-		let bare = (roomJID.components(separatedBy: "/").first ?? roomJID).lowercased()
-		activeMUCTokens.removeValue(forKey: bare)
-		joinedMUCRooms.remove(bare)
-		mucMessagesByRoom.removeValue(forKey: bare)
-		mucErrorByRoom.removeValue(forKey: bare)
-	}
-	
-	private func appendMUCMessage(_ message: XMPPMUCMessage, for roomJID: String) {
-		let key = roomJID.lowercased()
-		var list = mucMessagesByRoom[key] ?? []
-		let isDup = list.contains { existing in
-			existing.id == message.id
-			|| (existing.isOutgoing == message.isOutgoing
-				&& existing.body == message.body
-				&& abs(existing.timestamp.timeIntervalSince(message.timestamp)) < 15)
-		}
-		guard !isDup else { return }
-		list.append(message)
-		list.sort { $0.timestamp < $1.timestamp }
-		if list.count > 200 {
-			list = Array(list.suffix(200))
-		}
-		mucMessagesByRoom[key] = list
 	}
 	
 	func loadHistory(for jid: String) async {
@@ -794,15 +709,11 @@ final class SocialManager: ObservableObject {
 			for peer in toLoad {
 				Task { await self.loadHistory(for: peer) }
 			}
-			for (roomJID, token) in activeMUCTokens {
-				Task { try? await self.client.joinMUCRoom(roomJID: roomJID, token: token.isEmpty ? nil : token) }
-			}
 			
 		case .disconnected(let error):
 			PerfMonitor.log("XMPP", "disconnected error=\(error?.localizedDescription ?? "none")")
 			self.isRefreshing = false
 			self.loadingHistoryJIDs.removeAll()
-			self.joinedMUCRooms.removeAll()
 			if self.isInBackground {
 				self.connectionState = .disconnected
 			} else if let apiClient = self.activeClient, let error, !Self.isUnrecoverableAuthError(error) {
@@ -926,21 +837,6 @@ final class SocialManager: ObservableObject {
 				mergeArchive(history, for: peer)
 				saveCacheNow()
 			}
-			
-		case .mucJoined(let roomJID):
-			let key = roomJID.lowercased()
-			joinedMUCRooms.insert(key)
-			mucErrorByRoom[key] = nil
-			
-		case let .mucError(roomJID, message):
-			let key = roomJID.lowercased()
-			mucErrorByRoom[key] = message
-			
-		case .mucMessageReceived(let msg):
-			let key = msg.roomJID.lowercased()
-			var normalized = msg
-			normalized.roomJID = key
-			appendMUCMessage(normalized, for: key)
 		}
 	}
 	

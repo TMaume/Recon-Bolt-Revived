@@ -5,22 +5,15 @@ struct AgentPickerView: View {
 	@Binding var pregameInfo: LivePregameInfo
 	let userID: User.ID
 	let inventory: Inventory
-	var cooldownDuration: TimeInterval = 0
-	var showsDodgeButton: Bool = true
 	var onDodge: () -> Void = {}
 	
 	@State private var isConfirmingDodge = false
 	@State private var isDodging = false
-	@State private var cooldownUntil: Date?
 	
 	@Environment(\.valorantLoad) private var load
 	@Environment(\.assets) private var assets
 	
 	@ScaledMetric private var agentSize = 50
-	
-	private var isCoolingDown: Bool {
-		cooldownUntil.map { $0 > Date() } ?? false
-	}
 	
 	var body: some View {
 		let ownPlayer = pregameInfo.team.players.firstElement(withID: userID)!
@@ -56,65 +49,41 @@ struct AgentPickerView: View {
 				}
 				.buttonStyle(.borderedProminent)
 				.disabled(selectedAgentID == nil || takenAgents.contains(selectedAgentID!))
-				.disabled(hasSelectedAgent || isCoolingDown) // can't move this out because then it'd affect the relock gesture too
+				.disabled(hasSelectedAgent) // can't move this out because then it'd affect the relock gesture too
 				
-				if showsDodgeButton {
-					Button(role: .destructive) {
-						isConfirmingDodge = true
-					} label: {
-						Label("Dodge", systemImage: "rectangle.portrait.and.arrow.right")
-							.bold()
-							.lineLimit(1)
-							.opacity(isDodging ? 0.25 : 1)
-							.overlay {
-								if isDodging {
-									ProgressView()
-								}
-							}
-					}
-					.buttonStyle(.bordered)
-					.tint(.red)
-					.disabled(isDodging)
-					.confirmationDialog(
-						"Dodge Match?",
-						isPresented: $isConfirmingDodge,
-						titleVisibility: .visible
-					) {
-						Button("Dodge Match", role: .destructive) {
-							isDodging = true
-							Task {
-								defer { isDodging = false }
-								await load {
-									try await $0.quitPregameMatch(pregameInfo.id)
-									onDodge()
-								}
+				Button(role: .destructive) {
+					isConfirmingDodge = true
+				} label: {
+					Label("Dodge", systemImage: "rectangle.portrait.and.arrow.right")
+						.bold()
+						.lineLimit(1)
+						.opacity(isDodging ? 0.25 : 1)
+						.overlay {
+							if isDodging {
+								ProgressView()
 							}
 						}
-					} message: {
-						Text("Quitting during agent select may result in a queue penalty or RR loss.")
-					}
 				}
-			}
-			
-			if let cooldownUntil, cooldownDuration > 0 {
-				TimelineView(.periodic(from: .now, by: 0.1)) { context in
-					let remaining = max(0, cooldownUntil.timeIntervalSince(context.date))
-					let progress = max(0, min(1, remaining / cooldownDuration))
-					VStack(spacing: 4) {
-						HStack {
-							Label("Cooldown", systemImage: "timer")
-								.font(.caption.weight(.semibold))
-								.foregroundStyle(Color.accentColor)
-							Spacer()
-							Text(String(format: "%.1fs", remaining))
-								.font(.caption.weight(.bold))
-								.monospacedDigit()
-								.foregroundStyle(.secondary)
+				.buttonStyle(.bordered)
+				.tint(.red)
+				.disabled(isDodging)
+				.confirmationDialog(
+					"Dodge Match?",
+					isPresented: $isConfirmingDodge,
+					titleVisibility: .visible
+				) {
+					Button("Dodge Match", role: .destructive) {
+						isDodging = true
+						Task {
+							defer { isDodging = false }
+							await load {
+								try await $0.quitPregameMatch(pregameInfo.id)
+								onDodge()
+							}
 						}
-						ProgressView(value: progress)
-							.tint(Color.accentColor)
 					}
-					.padding(.horizontal, 8)
+				} message: {
+					Text("Quitting during agent select may result in a queue penalty or RR loss.")
 				}
 			}
 			
@@ -139,7 +108,6 @@ struct AgentPickerView: View {
 					
 					// random agent
 					AsyncButton {
-						startCooldownIfNeeded()
 						await load {
 							guard let agent = inventory.agents.subtracting(takenAgents).randomElement() else { return }
 							pregameInfo = try await $0.pickAgent(agent, in: pregameInfo.id)
@@ -154,31 +122,17 @@ struct AgentPickerView: View {
 					}
 				}
 				.padding(4)
-				.disabled(hasSelectedAgent || isCoolingDown)
+				.disabled(hasSelectedAgent)
 			}
 		}
 		.disabled(pregameInfo.state != .agentSelectActive)
 		.padding()
-		.task(id: cooldownUntil) {
-			guard let cooldownUntil else { return }
-			let delay = cooldownUntil.timeIntervalSinceNow
-			if delay > 0 {
-				try? await Task.sleep(for: .seconds(delay))
-			}
-			self.cooldownUntil = nil
-		}
-	}
-	
-	private func startCooldownIfNeeded() {
-		guard cooldownDuration > 0 else { return }
-		cooldownUntil = Date().addingTimeInterval(cooldownDuration)
 	}
 	
 	@ViewBuilder
 	func agentButton(for agent: AgentInfo, selectedAgentID: Agent.ID?, isTaken: Bool) -> some View {
 		let ownsAgent = inventory.owns(agent.id)
 		AsyncButton {
-			startCooldownIfNeeded()
 			await load {
 				pregameInfo = try await $0.pickAgent(agent.id, in: pregameInfo.id)
 			}
