@@ -6,131 +6,215 @@ import AudioToolbox
 struct LiveGameBox: View {
 	var userID: User.ID
 	@State var party: Party?
+	@State var partyPlayer: PartyPlayer?
 	@State var activeMatch: ActiveMatch?
 	@State var shownMatch: ActiveMatch?
+	@State private var isActiveMatchShootingRange = false
 	
 	@Binding var isExpanded: Bool
 	
-	@AppStorage("LiveGameBox.shouldAutoRefresh")
-	var shouldAutoRefresh = false
 	@AppStorage("LiveGameBox.shouldAutoShow")
 	var shouldAutoShow = false
 	
 	@Environment(\.valorantLoad) private var load
 	@EnvironmentObject private var settings: AppSettings
 	
-	var isInMatchmaking: Bool {
-		party?.state == .inMatchmaking
-	}
-	
-	var isAutoRefreshing: Bool {
-		shouldAutoRefresh || isInMatchmaking
-	}
-	
 	var body: some View {
-		RefreshableBox(title: "Party", isExpanded: $isExpanded) {
-			Divider()
+		VStack(spacing: 0) {
+			HStack {
+				ExpandButton(isExpanded: $isExpanded) {
+					HStack {
+						Text("Party")
+						Spacer()
+					}
+				}
+				.padding()
+				
+				Spacer()
+				
+				if isExpanded {
+					AutoRefresher {
+						await load(refresh)
+					}
+					.padding()
+					.contentShape(Rectangle())
+					.onTapGesture {
+						Task { await load(refresh) }
+					}
+				} else {
+					AsyncButton {
+						await load(refresh)
+					} label: {
+						Image(systemName: "arrow.clockwise")
+							.padding()
+					}
+				}
+			}
+			.font(.title2.weight(.semibold))
 			
-			VStack(spacing: 16) {
-				content
-			}
-			.padding(16)
-		} refresh: { try await refresh(using: $0) }
-			.onChange(of: activeMatch) { [activeMatch] newMatch in
-				if shouldAutoShow, activeMatch?.id != newMatch?.id {
-					shownMatch = newMatch
+			if isExpanded {
+				VStack(spacing: 14) {
+					content
 				}
-				if settings.vibrateOnMatchFound, activeMatch == nil, newMatch != nil {
-					AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
-					UINotificationFeedbackGenerator().notificationOccurred(.success)
-				}
+				.padding(.horizontal, 14)
+				.padding(.bottom, 14)
 			}
+		}
+		.background(Color.secondaryGroupedBackground)
+		.cornerRadius(20)
+		.shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 6)
+		.onSceneActivation {
+			guard isExpanded else { return }
+			await load(refresh)
+		}
+		.onChange(of: activeMatch) { [activeMatch] newMatch in
+			if newMatch == nil {
+				isActiveMatchShootingRange = false
+			}
+			if shouldAutoShow, activeMatch?.id != newMatch?.id {
+				shownMatch = newMatch
+			}
+			if settings.vibrateOnMatchFound, activeMatch == nil, newMatch != nil {
+				AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+				UINotificationFeedbackGenerator().notificationOccurred(.success)
+			}
+		}
 	}
 	
 	@ViewBuilder
 	private var content: some View {
 		if let activeMatch {
-			GroupBox {
-				if activeMatch.inPregame {
-					Text("Currently in agent select")
-				} else {
-					Text("Currently in-game")
-				}
-				
+			VStack(spacing: 12) {
 				Group {
-					NavigationLink(tag: activeMatch, selection: $shownMatch) {
-						LiveGameContainer(
-							userID: userID,
-							playersInParty: Set(party?.members.map(\.id) ?? []), 
-							activeMatch: activeMatch
-						)
-					} label: {
-						HStack {
-							if activeMatch.inPregame {
-								Image(systemName: "person.fill.viewfinder")
-								Text("Agent Select")
-							} else {
-								Image(systemName: "list.bullet.below.rectangle")
-								Text("Match Details")
-							}
+					if isActiveMatchShootingRange {
+						Text("Practice Range")
+					} else if activeMatch.inPregame {
+						Text("Currently in agent select")
+					} else {
+						Text("Currently in-game")
+					}
+				}
+				.font(.subheadline)
+				.foregroundStyle(.secondary)
+				
+				NavigationLink(tag: activeMatch, selection: $shownMatch) {
+					LiveGameContainer(
+						userID: userID,
+						playersInParty: Set(party?.members.map(\.id) ?? []),
+						party: party,
+						activeMatch: activeMatch,
+						isShootingRangeHint: isActiveMatchShootingRange
+					)
+				} label: {
+					HStack(spacing: 8) {
+						if isActiveMatchShootingRange {
+							Image(systemName: "scope")
+							Text("Agent Selector")
+						} else if activeMatch.inPregame {
+							Image(systemName: "person.fill.viewfinder")
+							Text("Agent Select")
+						} else {
+							Image(systemName: "list.bullet.below.rectangle")
+							Text("Match Details")
 						}
 					}
+					.font(.headline)
+					.foregroundStyle(Color.accentColor)
+					.frame(maxWidth: .infinity)
+					.padding(.vertical, 12)
+					.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 				}
-				.font(.headline)
-				.imageScale(.large)
+				.buttonStyle(.plain)
 			}
-		} else if party != nil { // i would like to use if let party = Binding($party), but that causes crashes internal to swiftui
-			PartyInfoBox(userID: userID, party: Binding(
-				get: { party! },
-				set: { party = $0 }
-			))
+			.frame(maxWidth: .infinity)
+			.padding(14)
+			.background(Color.tertiaryGroupedBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+		} else if party != nil {
+			PartyInfoBox(
+				userID: userID,
+				party: Binding(
+					get: { party! },
+					set: { party = $0 }
+				),
+				partyPlayer: partyPlayer,
+				shouldAutoShow: $shouldAutoShow,
+				onPartyChanged: {
+					await load(loadParty)
+				},
+				onStartPracticeRange: startPracticeRange
+			)
 		} else {
-			GroupBox {
+			VStack(spacing: 12) {
 				Text("Game is not running!")
-					.foregroundColor(.secondary)
+					.font(.subheadline)
+					.foregroundStyle(.secondary)
+					.frame(maxWidth: .infinity)
+					.padding(.vertical, 16)
+					.background(Color.tertiaryGroupedBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 			}
 		}
-		
-		VStack(spacing: 16) {
-			HStack(spacing: 10) {
-				if isAutoRefreshing {
-					AutoRefresher {
-						await load(refresh)
-					}
-				}
-				
-				Toggle("Refresh automatically", isOn: .init(
-					get: { isAutoRefreshing }, // force auto refresh while in matchmaking
-					set: { shouldAutoRefresh = $0 }
-				))
-				.disabled(isInMatchmaking)
-			}
-			
-			if isAutoRefreshing {
-				Toggle("Show details when found", isOn: $shouldAutoShow)
-			}
-		}
-		.animation(.default, value: isAutoRefreshing)
 	}
 	
 	@Sendable
 	func refresh(using client: ValorantClient) async throws {
-		// load independently & concurrently
-		// TODO: change once `async let _ = ...` is fixed
 		async let activeMatchUpdate: Void = loadActiveMatch(using: client)
 		async let partyUpdate: Void = loadParty(using: client)
 		_ = try await (activeMatchUpdate, partyUpdate)
 	}
 	
 	func loadActiveMatch(using client: ValorantClient) async throws {
-		activeMatch = try await client.getActiveMatch()
+		let fetched = try await client.getActiveMatch()
+		if let fetched {
+			if fetched.id != activeMatch?.id {
+				isActiveMatchShootingRange = false
+			}
+			if !isActiveMatchShootingRange {
+				if fetched.inPregame,
+				   let info = try? await client.getLivePregameInfo(fetched.id),
+				   info.isShootingRange {
+					isActiveMatchShootingRange = true
+				} else if !fetched.inPregame,
+						  let info = try? await client.getLiveGameInfo(fetched.id),
+						  info.isShootingRange {
+					isActiveMatchShootingRange = true
+				}
+			}
+		} else {
+			isActiveMatchShootingRange = false
+		}
+		activeMatch = fetched
 	}
 	
 	func loadParty(using client: ValorantClient) async throws {
-		party = try await client.getPartyInfo()
-		if let party {
-			LocalDataProvider.dataFetched(party)
-			try await client.fetchUsers(for: party.members.map(\.id))
+		async let fetchedParty = client.getPartyInfo()
+		async let fetchedPlayer = client.getPartyPlayer()
+		let loadedParty = try await fetchedParty
+		partyPlayer = try? await fetchedPlayer
+		party = loadedParty
+		if let loadedParty {
+			LocalDataProvider.dataFetched(loadedParty)
+			var ids = loadedParty.members.map(\.id)
+			ids.append(contentsOf: loadedParty.requests.map(\.requestedBy))
+			if let partyPlayer {
+				ids.append(contentsOf: partyPlayer.requests.map(\.requestedBy))
+			}
+			try await client.fetchUsers(for: Array(Set(ids)))
+		}
+	}
+	
+	func startPracticeRange() async {
+		await load { client in
+			try await client.startSoloExperience()
+			isActiveMatchShootingRange = true
+			for _ in 0..<8 {
+				if let match = try await client.getActiveMatch() {
+					activeMatch = match
+					shownMatch = match
+					return
+				}
+				try? await Task.sleep(for: .milliseconds(450))
+			}
+			try await refresh(using: client)
 		}
 	}
 }
@@ -141,8 +225,7 @@ struct LiveGameBox_Previews: PreviewProvider {
 		Group {
 			LiveGameBox(
 				userID: PreviewData.userID,
-				isExpanded: .constant(true),
-				shouldAutoRefresh: true
+				isExpanded: .constant(true)
 			)
 			LiveGameBox(
 				userID: PreviewData.userID,

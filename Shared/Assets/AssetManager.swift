@@ -102,7 +102,7 @@ final class AssetManager: ObservableObject {
 		if self.error != nil { self.error = nil }
 		do {
 			let loaded = try await loadAssets()
-			if let current = assets, current.version == loaded.version, current.language == loaded.language, !current.flex.isEmpty, !current.levelBorders.isEmpty {
+			if let current = assets, current.version == loaded.version, current.language == loaded.language, !current.flex.isEmpty, !current.levelBorders.isEmpty, !current.gamePods.isEmpty {
 				return
 			}
 			assets = loaded
@@ -125,7 +125,7 @@ final class AssetManager: ObservableObject {
 		let client = AssetClient(language: language)
 		let newest = try await client.getCurrentVersion()
 		
-		if let current = assets, current.version == newest, current.language == language, !current.flex.isEmpty, !current.levelBorders.isEmpty {
+		if let current = assets, current.version == newest, current.language == language, !current.flex.isEmpty, !current.levelBorders.isEmpty, !current.gamePods.isEmpty {
 			return false
 		}
 		
@@ -245,7 +245,7 @@ final class AssetManager: ObservableObject {
 	static let mockEmpty = AssetManager(assets: nil)
 	#endif
 	
-	private static let currentSchemaVersion = 5
+	private static let currentSchemaVersion = 6
 	
 	var resolvedLanguage: String {
 		languageOverride
@@ -264,7 +264,8 @@ final class AssetManager: ObservableObject {
 			stored.version == version,
 			stored.language == language,
 			!stored.flex.isEmpty,
-			!stored.levelBorders.isEmpty
+			!stored.levelBorders.isEmpty,
+			!stored.gamePods.isEmpty
 		{
 			return stored
 		} else {
