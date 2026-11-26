@@ -71,6 +71,12 @@ struct ReferenceView: View {
 						} label: {
 							hubRow(icon: "map.fill", title: "Map Ranks")
 						}
+						
+						NavigationLink {
+							GroupPerformanceView(userID: userID)
+						} label: {
+							hubRow(icon: "person.3.fill", title: "Group Performance")
+						}
 					}
 				} header: {
 					Text("Progress")

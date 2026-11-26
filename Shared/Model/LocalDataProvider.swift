@@ -85,6 +85,7 @@ final class LocalDataProvider {
 		shared.store(details.players.map(\.identity), asOf: details.matchInfo.gameStart)
 		UsernameHistoryStore.record(players: details.players)
 		AccoladesCacheStore.recordIfTracked(details)
+		GroupPerformanceCacheStore.recordIfTracked(details)
 	}
 	
 	static func dataFetched(_ info: LivePregameInfo) {

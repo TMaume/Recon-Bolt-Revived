@@ -180,6 +180,40 @@ struct MatchListView: View {
 						.buttonStyle(.plain)
 						.disabled(user == nil || matchList == nil)
 					}
+					
+					NavigationLink {
+						GroupPerformanceView(
+							userID: userID,
+							isOwnAccount: userID == accountManager.activeAccount?.id,
+							subjectDisplayName: user?.gameName,
+							initialMatches: shownMatches
+						)
+					} label: {
+						HStack(spacing: 10) {
+							Image(systemName: "person.3.fill")
+								.font(.subheadline.weight(.semibold))
+								.foregroundStyle(Color.accentColor)
+							
+							VStack(alignment: .leading, spacing: 2) {
+								Text("Group Performance")
+									.font(.subheadline.weight(.semibold))
+									.foregroundStyle(.primary)
+								Text("Friends, party synergy & stack win rates")
+									.font(.caption)
+									.foregroundStyle(.secondary)
+									.lineLimit(1)
+							}
+							
+							Spacer()
+							
+							Image(systemName: "chevron.right")
+								.font(.caption2.weight(.semibold))
+								.foregroundStyle(.tertiary)
+						}
+						.padding(12)
+						.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+					}
+					.buttonStyle(.plain)
 				}
 				.padding(.bottom, 6)
 				

@@ -151,6 +151,12 @@ struct XMPPFriend: Identifiable, Equatable, Codable, Sendable {
 		return jid
 	}
 	
+	var resolvedUserID: User.ID? {
+		if let puuid { return puuid }
+		guard let atIndex = jid.firstIndex(of: "@") else { return nil }
+		return User.ID(String(jid[..<atIndex]).lowercased())
+	}
+	
 	var isIncomingRequest: Bool { subscription == "pending_in" }
 	var isOutgoingRequest: Bool { subscription == "pending_out" }
 }
