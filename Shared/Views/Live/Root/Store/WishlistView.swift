@@ -5,6 +5,7 @@ struct WishlistView: View {
 	@EnvironmentObject private var wishlistManager: WishlistManager
 	@EnvironmentObject private var accountManager: AccountManager
 	@EnvironmentObject private var shopHistoryStore: ShopHistoryStore
+	@EnvironmentObject private var notificationManager: StoreNotificationManager
 	@Environment(\.assets) private var assets
 	@Environment(\.colorScheme) private var colorScheme
 	
@@ -489,6 +490,14 @@ struct WishlistView: View {
 				let storefront = try await client.getStorefront()
 				checkedCount += 1
 				shopHistoryStore.record(storefront: storefront, for: accountID)
+				await notificationManager.processObservedStorefront(
+					storefront,
+					for: accountID,
+					fetchDate: Date(),
+					assets: assets,
+					wishlistEntries: wishlistManager.entries,
+					isBackground: false
+				)
 				
 				let matches = wishlistManager.matchingDailyOffers(in: storefront, assets: assets)
 				for match in matches {

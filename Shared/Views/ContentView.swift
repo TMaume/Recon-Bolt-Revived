@@ -10,6 +10,7 @@ struct ContentView: View {
 	let store: InAppStore
 	
 	@Environment(\.backupStores) private var backupStores
+	@EnvironmentObject private var notificationManager: StoreNotificationManager
 	
 	@SceneStorage("tab")
 	var tab = Tab.career
@@ -82,6 +83,12 @@ struct ContentView: View {
 				}
 			}
 		}
+		.onAppear {
+			consumeNotificationRouteIfNeeded()
+		}
+		.onChange(of: notificationManager.pendingRoute) { _ in
+			consumeNotificationRouteIfNeeded()
+		}
 	}
 	
 	@ViewBuilder
@@ -143,9 +150,20 @@ struct ContentView: View {
 		switch link {
 		case .storefront:
 			tab = .settings
+		case .store:
+			tab = .live
 		}
 		
 		handleWithDelay(.inApp(link))
+	}
+	
+	private func consumeNotificationRouteIfNeeded() {
+		guard let route = notificationManager.consumePendingRoute() else { return }
+		if let accountID = route.accountID,
+		   accountManager.storedAccounts.contains(accountID) {
+			try? accountManager.setActive(accountID)
+		}
+		handle(InAppLink.store(expandNightMarket: route.expandNightMarket))
 	}
 	
 	private func handleWithDelay(_ link: DeepLink) {
@@ -194,6 +212,7 @@ struct ContentView_Previews: PreviewProvider {
 		.environmentObject(ProgressTimelineStore())
 		.environmentObject(SocialManager())
 		.environmentObject(LineupsManager())
+		.environmentObject(StoreNotificationManager.shared)
 	}
 }
 #endif

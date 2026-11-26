@@ -5,6 +5,7 @@ struct StoreDetailsView: View {
 	var updateTime: Date
 	var storefront: Storefront
 	var wallet: StoreWallet
+	@Binding var autoExpandNightMarket: Bool
 	
 	@State var isNightMarketExpanded = false
 	
@@ -12,6 +13,19 @@ struct StoreDetailsView: View {
 	@EnvironmentObject private var wishlistManager: WishlistManager
 	@EnvironmentObject private var shopHistoryStore: ShopHistoryStore
 	@EnvironmentObject private var accountManager: AccountManager
+	@EnvironmentObject private var notificationManager: StoreNotificationManager
+	
+	init(
+		updateTime: Date,
+		storefront: Storefront,
+		wallet: StoreWallet,
+		autoExpandNightMarket: Binding<Bool> = .constant(false)
+	) {
+		self.updateTime = updateTime
+		self.storefront = storefront
+		self.wallet = wallet
+		self._autoExpandNightMarket = autoExpandNightMarket
+	}
 	
 	private static let currencies: [Currency.ID] = [.valorantPoints, .radianitePoints, .kingdomCredits]
 	
@@ -134,9 +148,29 @@ struct StoreDetailsView: View {
 			.padding(.top, 4)
 		}
 		.padding()
+		.onAppear {
+			if autoExpandNightMarket {
+				isNightMarketExpanded = true
+				autoExpandNightMarket = false
+			}
+		}
+		.onChange(of: autoExpandNightMarket) { expand in
+			if expand {
+				isNightMarketExpanded = true
+				autoExpandNightMarket = false
+			}
+		}
 		.task(id: updateTime) {
 			if let accountID = accountManager.activeAccount?.id {
 				shopHistoryStore.record(storefront: storefront, for: accountID)
+				await notificationManager.processObservedStorefront(
+					storefront,
+					for: accountID,
+					fetchDate: updateTime,
+					assets: assets,
+					wishlistEntries: wishlistManager.entries,
+					isBackground: false
+				)
 			}
 		}
 		
@@ -467,6 +501,7 @@ struct StoreDetailsView_Previews: PreviewProvider {
 		.environmentObject(WishlistManager())
 		.environmentObject(ShopHistoryStore())
 		.environmentObject(AccountManager.mocked)
+		.environmentObject(StoreNotificationManager.shared)
 		.withToolbar()
 	}
 }

@@ -13,6 +13,7 @@ struct SettingsView: View {
 	@State private var loginTarget: AccountSettingsView.LoginTarget?
 	@StateObject private var loginWebViewModel = RiotLoginWebViewModel()
 	@State private var showingAccentColorPicker = false
+	@EnvironmentObject private var notificationManager: StoreNotificationManager
 	
 	@Namespace private var storefrontID
 	
@@ -30,6 +31,26 @@ struct SettingsView: View {
 				}
 				
 				Section {
+					NavigationLink {
+						NotificationSettingsView(
+							accountManager: accountManager,
+							assetManager: assetManager,
+							settings: settings
+						)
+					} label: {
+						Label {
+							HStack {
+								Text("Notifications")
+								Spacer()
+								Text(notificationStatusText)
+									.foregroundStyle(.secondary)
+							}
+						} icon: {
+							Image(systemName: "bell.badge")
+								.foregroundStyle(.tint)
+						}
+					}
+					
 					NavigationLink {
 						StorageView(accountManager: accountManager, assetManager: assetManager, settings: settings)
 					} label: {
@@ -87,6 +108,13 @@ struct SettingsView: View {
 			}
 		}
 		.navigationTitle("Settings")
+	}
+	
+	private var notificationStatusText: String {
+		if notificationManager.authorizationStatus == .denied {
+			return "Blocked"
+		}
+		return settings.anyStoreNotificationEnabled ? "On" : "Off"
 	}
 	
 	@ViewBuilder
@@ -289,20 +317,23 @@ private struct AccentColorPickerPresenter: UIViewControllerRepresentable {
 #if DEBUG
 struct SettingsView_Previews: PreviewProvider {
 	static var previews: some View {
-		SettingsView(accountManager: .mocked, assetManager: .forPreviews, settings: .init(), store: .init())
-			.withToolbar()
-		
-		AdvancedSettingsView(accountManager: .mocked, assetManager: .forPreviews, settings: .init())
-			.withToolbar()
-			.previewDisplayName("Advanced Settings")
-		
-		SettingsView(accountManager: .mockEmpty, assetManager: .mockEmpty, settings: .init(), store: .init())
-			.withToolbar()
-			.previewDisplayName("Empty Managers")
-		
-		AppIconPicker(manager: .init())
-			.withToolbar()
-			.previewDisplayName("App Icon Picker")
+		Group {
+			SettingsView(accountManager: .mocked, assetManager: .forPreviews, settings: .init(), store: .init())
+				.withToolbar()
+			
+			AdvancedSettingsView(accountManager: .mocked, assetManager: .forPreviews, settings: .init())
+				.withToolbar()
+				.previewDisplayName("Advanced Settings")
+			
+			SettingsView(accountManager: .mockEmpty, assetManager: .mockEmpty, settings: .init(), store: .init())
+				.withToolbar()
+				.previewDisplayName("Empty Managers")
+			
+			AppIconPicker(manager: .init())
+				.withToolbar()
+				.previewDisplayName("App Icon Picker")
+		}
+		.environmentObject(StoreNotificationManager.shared)
 	}
 }
 #endif

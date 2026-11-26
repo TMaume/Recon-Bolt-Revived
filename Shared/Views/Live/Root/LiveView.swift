@@ -20,6 +20,7 @@ struct LiveView: View {
 	@State private var agentMastery: AgentMastery?
 	@State private var resolvedContracts: ResolvedContracts?
 	@State private var contractsGeneration = 0
+	@State private var shouldExpandNightMarket = false
 	
 	@UserDefault.State("LiveView.expandedBoxes")
 	var expandedBoxes: Set<Box> = [.party]
@@ -124,7 +125,9 @@ struct LiveView: View {
 			infoOrPlaceholder(placeholder: "Store not loaded!", storeInfo) { info in
 				StoreDetailsView(
 					updateTime: info.updateTime,
-					storefront: info.storefront, wallet: info.wallet
+					storefront: info.storefront,
+					wallet: info.wallet,
+					autoExpandNightMarket: $shouldExpandNightMarket
 				)
 			}
 		} refresh: {
@@ -148,6 +151,12 @@ struct LiveView: View {
 			default:
 				break
 			}
+		case .inApp(.store(let expandNightMarket)):
+			expandedBoxes.insert(.store)
+			if expandNightMarket {
+				shouldExpandNightMarket = true
+			}
+			scrollView.scrollTo(storeBoxID)
 		default:
 			break
 		}

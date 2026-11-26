@@ -18,13 +18,28 @@ private final class AppServices {
 	let lineupsManager = LineupsManager()
 }
 
+@MainActor
+final class ReconBoltAppDelegate: NSObject, UIApplicationDelegate {
+	func application(
+		_ application: UIApplication,
+		didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+	) -> Bool {
+		if ProcessInfo.processInfo.environment["XCInjectBundleInto"] == nil {
+			StoreNotificationManager.shared.registerBackgroundTasks()
+		}
+		return true
+	}
+}
+
 @main
 struct ReconBoltApp: App {
+	@UIApplicationDelegateAdaptor(ReconBoltAppDelegate.self) private var appDelegate
 	@StateObject var accountManager = AccountManager()
 	@StateObject var assetManager = AssetManager()
 	@StateObject var settings = AppSettings()
 	@StateObject var store = InAppStore()
 	@StateObject var configManager = GameConfigManager()
+	@StateObject private var notificationManager = StoreNotificationManager.shared
 	private let services = AppServices()
 	@State private var hasLaunched = false
 	
@@ -57,6 +72,7 @@ struct ReconBoltApp: App {
 					.environmentObject(services.socialManager)
 					.environmentObject(services.socialManager.onlineCountModel)
 					.environmentObject(services.lineupsManager)
+					.environmentObject(notificationManager)
 					.environment(\.configs, configManager.configs())
 					.environment(\.assets, assetManager.assets)
 					.environment(\.location, accountManager.activeAccount?.location)
@@ -95,7 +111,8 @@ struct ReconBoltApp: App {
 				}
 				.modifier(SocialSceneLifecycleModifier(
 					socialManager: services.socialManager,
-					accountManager: accountManager
+					accountManager: accountManager,
+					notificationManager: notificationManager
 				))
 				.task(id: assetManager.assets?.version) {
 					guard let assets = assetManager.assets else { return }
@@ -111,6 +128,17 @@ struct ReconBoltApp: App {
 		PerfMonitor.log("PERF", "ReconBoltApp.onLaunch")
 		ReviewManager.registerUsage(points: 2)
 		AppSettings.applyGlobalTint(settings.effectiveAccentColor)
+		
+		notificationManager.configure(
+			accountManager: accountManager,
+			assetManager: assetManager,
+			settings: settings,
+			wishlistManager: services.wishlistManager,
+			shopHistoryStore: services.shopHistoryStore
+		)
+		Task {
+			await notificationManager.handleAppLaunch()
+		}
 		
 		let bookmarkList = services.bookmarkList
 		Task {
@@ -133,6 +161,7 @@ struct ReconBoltApp: App {
 private struct SocialSceneLifecycleModifier: ViewModifier {
 	let socialManager: SocialManager
 	let accountManager: AccountManager
+	let notificationManager: StoreNotificationManager
 	
 	@Environment(\.scenePhase) private var scenePhase
 	@State private var lastPhase: ScenePhase?
@@ -145,12 +174,15 @@ private struct SocialSceneLifecycleModifier: ViewModifier {
 				if previous == nil {
 					if scenePhase == .background {
 						socialManager.handleDidEnterBackground()
+						notificationManager.handleDidEnterBackground()
 					}
 					return
 				}
 				if scenePhase == .background {
 					socialManager.handleDidEnterBackground()
+					notificationManager.handleDidEnterBackground()
 				} else if scenePhase == .active, previous != .active {
+					await notificationManager.refreshStatus()
 					await socialManager.handleSceneActivation(using: accountManager.activeAccount?.client)
 				}
 			}
