@@ -161,6 +161,16 @@ struct XMPPFriend: Identifiable, Equatable, Codable, Sendable {
 	
 	var isIncomingRequest: Bool { subscription == "pending_in" }
 	var isOutgoingRequest: Bool { subscription == "pending_out" }
+	
+	static func compareNames(_ lhs: XMPPFriend, _ rhs: XMPPFriend) -> Bool {
+		let lPrimary = lhs.gameName.isEmpty ? lhs.jid : lhs.gameName
+		let rPrimary = rhs.gameName.isEmpty ? rhs.jid : rhs.gameName
+		let cmp = lPrimary.localizedCaseInsensitiveCompare(rPrimary)
+		if cmp != .orderedSame {
+			return cmp == .orderedAscending
+		}
+		return lhs.tagLine.localizedCaseInsensitiveCompare(rhs.tagLine) == .orderedAscending
+	}
 }
 
 struct XMPPPresenceUpdate: Equatable, Sendable {
@@ -290,6 +300,9 @@ actor XMPPClient {
 	private var pendingArchivePeerByIQID: [String: String] = [:]
 	private var pendingIQContinuations: [String: ContinuationBox<String>] = [:]
 	private var preferredNoteVariantKey: String?
+	private var preferredAcceptVariantKey: String?
+	private var lastRosterSubscriptionsByJID: [String: String] = [:]
+	private var lastRosterSubscriptionsByPUUID: [String: String] = [:]
 	
 	private struct IQErrorRejection: Error {
 		let summary: String
@@ -442,6 +455,9 @@ actor XMPPClient {
 		}
 		pendingIQContinuations.removeAll()
 		preferredNoteVariantKey = nil
+		preferredAcceptVariantKey = nil
+		lastRosterSubscriptionsByJID.removeAll()
+		lastRosterSubscriptionsByPUUID.removeAll()
 		connection?.cancel()
 		connection = nil
 		clearBuffer()
@@ -506,27 +522,172 @@ actor XMPPClient {
 		try await sendRaw(xml)
 	}
 	
-	func addFriend(gameName: String, tagLine: String) async throws {
-		guard isRunning else { throw XMPPError.notConnected }
-		let id = UUID().uuidString.prefix(8)
-		let xml = "<iq type=\"set\" id=\"roster_add_\(id)\"><query xmlns=\"jabber:iq:riotgames:roster\"><item subscription=\"pending_out\"><id name=\"\(escapeXML(gameName))\" tagline=\"\(escapeXML(tagLine))\"/></item></query></iq>"
-		try await sendRaw(xml)
+	private func recordRosterSubscriptions(_ friends: [XMPPFriend], isFullSnapshot: Bool) {
+		if isFullSnapshot {
+			lastRosterSubscriptionsByJID.removeAll(keepingCapacity: true)
+			lastRosterSubscriptionsByPUUID.removeAll(keepingCapacity: true)
+		}
+		for item in friends {
+			let bareLower = bareLowercaseJID(item.jid)
+			let puuidLower = item.resolvedUserID?.description.lowercased()
+			let sub = item.subscription.lowercased()
+			if sub == "remove" {
+				lastRosterSubscriptionsByJID.removeValue(forKey: bareLower)
+				if let puuidLower {
+					lastRosterSubscriptionsByPUUID.removeValue(forKey: puuidLower)
+				}
+			} else {
+				lastRosterSubscriptionsByJID[bareLower] = sub
+				if let puuidLower {
+					lastRosterSubscriptionsByPUUID[puuidLower] = sub
+				}
+			}
+		}
 	}
 	
-	func acceptFriend(jid: String) async throws {
+	private func isConfirmedMutualFriend(bareLower: String, puuidLower: String?) -> Bool {
+		if lastRosterSubscriptionsByJID[bareLower] == "both" {
+			return true
+		}
+		if let puuidLower, lastRosterSubscriptionsByPUUID[puuidLower] == "both" {
+			return true
+		}
+		return false
+	}
+	
+	private func bareLowercaseJID(_ jid: String) -> String {
+		if let slash = jid.firstIndex(of: "/") {
+			return jid[..<slash].lowercased()
+		}
+		return jid.lowercased()
+	}
+	
+	private func requestRosterAndWait() async throws {
 		guard isRunning else { throw XMPPError.notConnected }
-		let id = UUID().uuidString.prefix(8)
+		let id = "roster_request_\(UUID().uuidString.prefix(8))"
+		let xml = "<iq type=\"get\" id=\"\(id)\"><query xmlns=\"jabber:iq:riotgames:roster\" last_state=\"true\" /></iq>"
+		_ = try await sendIQAndWait(id: id, xml: xml, timeoutStep: "verifying friend request")
+	}
+	
+	func addFriend(gameName: String, tagLine: String) async throws {
+		guard isRunning else { throw XMPPError.notConnected }
+		let id = "roster_add_\(UUID().uuidString.prefix(8))"
+		let xml = "<iq type=\"set\" id=\"\(id)\"><query xmlns=\"jabber:iq:riotgames:roster\"><item subscription=\"pending_out\"><id name=\"\(escapeXML(gameName))\" tagline=\"\(escapeXML(tagLine))\"/></item></query></iq>"
+		do {
+			_ = try await sendIQAndWait(id: id, xml: xml, timeoutStep: "sending friend request")
+		} catch let rejection as IQErrorRejection {
+			throw XMPPError.connectionFailed("Riot Chat rejected the friend request (\(rejection.summary)).")
+		}
+	}
+	
+	private func rosterIDElement(gameName: String?, tagLine: String?) -> String {
+		guard let gameName, !gameName.isEmpty, let tagLine, !tagLine.isEmpty else {
+			return ""
+		}
+		return "<id name=\"\(escapeXML(gameName))\" tagline=\"\(escapeXML(tagLine))\"/>"
+	}
+	
+	private static func prioritizeVariants(
+		_ rawVariants: [(key: String, queryXML: String)],
+		preferredKey: String?
+	) -> [(key: String, queryXML: String)] {
+		var seenPayloads: Set<String> = []
+		var candidates = rawVariants.filter { seenPayloads.insert($0.queryXML).inserted }
+		if let preferredKey,
+		   let idx = candidates.firstIndex(where: { $0.key == preferredKey }),
+		   idx > 0 {
+			let preferredItem = candidates.remove(at: idx)
+			candidates.insert(preferredItem, at: 0)
+		}
+		return candidates
+	}
+	
+	func acceptFriend(
+		jid: String,
+		puuid: User.ID? = nil,
+		gameName: String? = nil,
+		tagLine: String? = nil
+	) async throws {
+		guard isRunning else { throw XMPPError.notConnected }
 		let bare = jid.components(separatedBy: "/").first ?? jid
-		let xml = "<iq type=\"set\" id=\"roster_accept_\(id)\"><query xmlns=\"jabber:iq:riotgames:roster\"><item jid=\"\(escapeXML(bare))\" subscription=\"both\"/></query></iq>"
-		try await sendRaw(xml)
+		let bareLower = bare.lowercased()
+		let escapedBare = escapeXML(bare)
+		let puuidLower = (puuid ?? bareLower.split(separator: "@", maxSplits: 1).first.flatMap { User.ID(String($0)) })?
+			.description.lowercased()
+		let idElement = rosterIDElement(gameName: gameName, tagLine: tagLine)
+		
+		var rawVariants: [(key: String, queryXML: String)] = []
+		if !idElement.isEmpty {
+			rawVariants.append((
+				"riot_pending_out_id",
+				"<query xmlns=\"jabber:iq:riotgames:roster\"><item subscription=\"pending_out\">\(idElement)</item></query>"
+			))
+		}
+		rawVariants.append((
+			"riot_pending_out_jid",
+			"<query xmlns=\"jabber:iq:riotgames:roster\"><item jid=\"\(escapedBare)\" subscription=\"pending_out\"/></query>"
+		))
+		if !idElement.isEmpty {
+			rawVariants.append((
+				"riot_pending_out_jid_id",
+				"<query xmlns=\"jabber:iq:riotgames:roster\"><item jid=\"\(escapedBare)\" subscription=\"pending_out\">\(idElement)</item></query>"
+			))
+		}
+		if let puuidLower, !puuidLower.isEmpty {
+			rawVariants.append((
+				"riot_pending_out_puuid",
+				"<query xmlns=\"jabber:iq:riotgames:roster\"><item jid=\"\(escapedBare)\" puuid=\"\(escapeXML(puuidLower))\" subscription=\"pending_out\">\(idElement)</item></query>"
+			))
+		}
+		
+		let candidates = Self.prioritizeVariants(rawVariants, preferredKey: preferredAcceptVariantKey)
+		
+		var firstRejection: IQErrorRejection?
+		var lastRejection: IQErrorRejection?
+		for candidate in candidates {
+			guard isRunning else { throw XMPPError.notConnected }
+			try Task.checkCancellation()
+			let id = "roster_accept_\(UUID().uuidString.prefix(8))"
+			let xml = "<iq type=\"set\" id=\"\(id)\">\(candidate.queryXML)</iq>"
+			do {
+				_ = try await sendIQAndWait(id: id, xml: xml, timeoutStep: "accepting friend request")
+				if !isConfirmedMutualFriend(bareLower: bareLower, puuidLower: puuidLower) {
+					try await Task.sleep(for: .milliseconds(200))
+				}
+				if !isConfirmedMutualFriend(bareLower: bareLower, puuidLower: puuidLower) {
+					try? await requestRosterAndWait()
+				}
+				try Task.checkCancellation()
+				if isConfirmedMutualFriend(bareLower: bareLower, puuidLower: puuidLower) {
+					preferredAcceptVariantKey = candidate.key
+					return
+				}
+				PerfMonitor.log("XMPP", "acceptFriend variant=\(candidate.key) returned result but server kept pending state")
+			} catch let rejection as IQErrorRejection {
+				PerfMonitor.log("XMPP", "acceptFriend variant=\(candidate.key) rejected: \(rejection.summary)")
+				if firstRejection == nil {
+					firstRejection = rejection
+				}
+				lastRejection = rejection
+			}
+		}
+		
+		if let detail = firstRejection?.summary ?? lastRejection?.summary {
+			throw XMPPError.connectionFailed("Riot Chat rejected accepting the friend request (\(detail)). Try accepting it in Riot Client or Riot Mobile.")
+		}
+		throw XMPPError.connectionFailed("Riot Chat did not confirm accepting the friend request. Try accepting it in Riot Client or Riot Mobile.")
 	}
 	
 	func removeFriend(jid: String) async throws {
 		guard isRunning else { throw XMPPError.notConnected }
-		let id = UUID().uuidString.prefix(8)
+		let id = "roster_remove_\(UUID().uuidString.prefix(8))"
 		let bare = jid.components(separatedBy: "/").first ?? jid
-		let xml = "<iq type=\"set\" id=\"roster_remove_\(id)\"><query xmlns=\"jabber:iq:riotgames:roster\"><item jid=\"\(escapeXML(bare))\" subscription=\"remove\"/></query></iq>"
-		try await sendRaw(xml)
+		let xml = "<iq type=\"set\" id=\"\(id)\"><query xmlns=\"jabber:iq:riotgames:roster\"><item jid=\"\(escapeXML(bare))\" subscription=\"remove\"/></query></iq>"
+		do {
+			_ = try await sendIQAndWait(id: id, xml: xml, timeoutStep: "removing friend")
+		} catch let rejection as IQErrorRejection {
+			throw XMPPError.connectionFailed("Riot Chat rejected removing friend (\(rejection.summary)).")
+		}
 	}
 	
 	func setFriendNote(
@@ -561,12 +722,7 @@ actor XMPPClient {
 		let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 		let noteXML = trimmed.isEmpty ? "<note/>" : "<note>\(escapeXML(trimmed))</note>"
 		let puuidAttr = puuid.map { " puuid=\"\(escapeXML($0.description.lowercased()))\"" } ?? ""
-		let idElement: String
-		if let gameName, !gameName.isEmpty, let tagLine, !tagLine.isEmpty {
-			idElement = "<id name=\"\(escapeXML(gameName))\" tagline=\"\(escapeXML(tagLine))\"/>"
-		} else {
-			idElement = ""
-		}
+		let idElement = rosterIDElement(gameName: gameName, tagLine: tagLine)
 		
 		var rawVariants: [(key: String, queryXML: String)] = [
 			(
@@ -601,14 +757,7 @@ actor XMPPClient {
 			))
 		}
 		
-		var seenPayloads: Set<String> = []
-		var candidates = rawVariants.filter { seenPayloads.insert($0.queryXML).inserted }
-		if let preferred = preferredNoteVariantKey,
-		   let idx = candidates.firstIndex(where: { $0.key == preferred }),
-		   idx > 0 {
-			let preferredItem = candidates.remove(at: idx)
-			candidates.insert(preferredItem, at: 0)
-		}
+		let candidates = Self.prioritizeVariants(rawVariants, preferredKey: preferredNoteVariantKey)
 		
 		var firstRejection: IQErrorRejection?
 		var lastRejection: IQErrorRejection?
@@ -1078,6 +1227,16 @@ actor XMPPClient {
 			let iqID = extractAttribute("id", from: stanza) ?? ""
 			let iqType = extractAttribute("type", from: stanza) ?? ""
 			let isError = iqType.lowercased() == "error"
+			var parsedRosterToEmit: (friends: [XMPPFriend], isFullSnapshot: Bool, isServerPush: Bool)?
+			if !isError, (stanza.contains("jabber:iq:riotgames:roster") || stanza.contains("jabber:iq:roster")) {
+				let isFullSnapshot = (iqType == "result" && iqID.hasPrefix("roster_request"))
+				let isServerPush = (iqType == "set")
+				let friends = parseRosterItems(from: stanza)
+				recordRosterSubscriptions(friends, isFullSnapshot: isFullSnapshot)
+				if !friends.isEmpty || isFullSnapshot {
+					parsedRosterToEmit = (friends, isFullSnapshot, isServerPush)
+				}
+			}
 			if let box = pendingIQContinuations.removeValue(forKey: iqID) {
 				if isError {
 					_ = box.resolve(with: .failure(parseIQError(from: stanza)))
@@ -1085,13 +1244,8 @@ actor XMPPClient {
 					_ = box.resolve(with: .success(stanza))
 				}
 			}
-			if !isError, (stanza.contains("jabber:iq:riotgames:roster") || stanza.contains("jabber:iq:roster")) {
-				let isFullSnapshot = (iqType == "result" && iqID.hasPrefix("roster_request"))
-				let isServerPush = (iqType == "set")
-				let friends = parseRosterItems(from: stanza)
-				if !friends.isEmpty || isFullSnapshot {
-					await eventHandler?(.rosterReceived(friends, isFullSnapshot: isFullSnapshot, isServerPush: isServerPush))
-				}
+			if let roster = parsedRosterToEmit {
+				await eventHandler?(.rosterReceived(roster.friends, isFullSnapshot: roster.isFullSnapshot, isServerPush: roster.isServerPush))
 			} else if stanza.contains("jabber:iq:riotgames:archive") || pendingArchivePeerByIQID[iqID] != nil {
 				let trackedPeer = pendingArchivePeerByIQID.removeValue(forKey: iqID)
 				if isError {
@@ -1157,7 +1311,7 @@ actor XMPPClient {
 			case "from":
 				subscription = "pending_in"
 			default:
-				subscription = rawSub
+				subscription = rawSub.lowercased()
 			}
 			
 			let gameName = unescapeXML(
@@ -1202,9 +1356,13 @@ actor XMPPClient {
 		let bareJID = String(parts.first ?? Substring(rawFrom))
 		let resource = parts.count > 1 ? String(parts[1]) : ""
 		let typeAttr = extractAttribute("type", from: xml)
+		let normalizedType = typeAttr?.lowercased()
+		guard normalizedType == nil || normalizedType == "available" || normalizedType == "unavailable" else {
+			return nil
+		}
 		var lastOnline = parseRiotTimestamp(extractTagContent(from: xml, tag: "last_online"))
 		
-		if typeAttr == "unavailable" {
+		if normalizedType == "unavailable" {
 			return .presenceUpdated(XMPPPresenceUpdate(
 				jid: bareJID,
 				resource: resource,

@@ -180,6 +180,7 @@ final class SocialManager: ObservableObject {
 	private var historyTimeoutTasks: [String: Task<Void, Never>] = [:]
 	
 	private(set) var friends: [XMPPFriend] = []
+	private(set) var friendsRevision: Int = 0
 	private(set) var onlineCount: Int = 0
 	private(set) var confirmedFriendCount: Int = 0
 	private(set) var outgoingRequestCount: Int = 0
@@ -208,7 +209,7 @@ final class SocialManager: ObservableObject {
 			if lhs.status != rhs.status {
 				return lhs.status < rhs.status
 			}
-			return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+			return XMPPFriend.compareNames(lhs, rhs)
 		}
 		var online = 0
 		var confirmed = 0
@@ -246,6 +247,7 @@ final class SocialManager: ObservableObject {
 			}
 		}
 		self.friends = sorted
+		self.friendsRevision &+= 1
 		self.onlineCount = online
 		self.confirmedFriendCount = confirmed
 		self.outgoingRequestCount = outgoing
@@ -650,29 +652,52 @@ final class SocialManager: ObservableObject {
 	}
 	
 	func acceptFriend(_ friend: XMPPFriend) async throws {
-		try await client.acceptFriend(jid: friend.jid)
-		var updated = friendsByJID
-		if updated[friend.jid] != nil {
-			updated[friend.jid]?.subscription = "both"
+		let targetJID = canonicalJID(for: friend.jid)
+		let current = friendsByJID[targetJID] ?? friend
+		try await client.acceptFriend(
+			jid: current.jid,
+			puuid: current.resolvedUserID,
+			gameName: current.gameName,
+			tagLine: current.tagLine
+		)
+		if friendsByJID[targetJID]?.subscription != "both" {
+			var updated = friendsByJID
+			if updated[targetJID] != nil {
+				updated[targetJID]?.subscription = "both"
+			} else {
+				var copy = current
+				copy.subscription = "both"
+				updated[targetJID] = copy
+			}
 			commitFriends(updated)
 		}
-		snapshotSubscriptions[friend.jid] = "both"
-		scheduleCacheSave()
+		snapshotSubscriptions[targetJID] = "both"
+		saveCacheNow()
 	}
 	
 	func removeFriend(_ friend: XMPPFriend) async throws {
-		locallyRemovedJIDs.insert(friend.jid)
-		try await client.removeFriend(jid: friend.jid)
+		let targetJID = canonicalJID(for: friend.jid)
+		let current = friendsByJID[targetJID] ?? friend
+		let trackedKeys = Set([targetJID, friend.jid, current.jid])
+		locallyRemovedJIDs.formUnion(trackedKeys)
+		do {
+			try await client.removeFriend(jid: current.jid)
+		} catch {
+			locallyRemovedJIDs.subtract(trackedKeys)
+			throw error
+		}
 		var updated = friendsByJID
-		if updated.removeValue(forKey: friend.jid) != nil {
+		let removedCanonical = updated.removeValue(forKey: targetJID)
+		let removedRaw = (friend.jid != targetJID) ? updated.removeValue(forKey: friend.jid) : nil
+		if removedCanonical != nil || removedRaw != nil {
 			commitFriends(updated)
 		}
-		resourcesByJID.removeValue(forKey: friend.jid)
-		snapshotSubscriptions.removeValue(forKey: friend.jid)
-		let canonical = canonicalJID(for: friend.jid)
-		pinnedFriendJIDs.remove(Self.normalizedPinnedJID(friend.jid))
-		pinnedFriendJIDs.remove(Self.normalizedPinnedJID(canonical))
-		scheduleCacheSave()
+		for key in trackedKeys {
+			resourcesByJID.removeValue(forKey: key)
+			snapshotSubscriptions.removeValue(forKey: key)
+			pinnedFriendJIDs.remove(Self.normalizedPinnedJID(key))
+		}
+		saveCacheNow()
 	}
 	
 	func updateFriendNote(_ friend: XMPPFriend, note: String?) async throws {
@@ -856,7 +881,9 @@ final class SocialManager: ObservableObject {
 					resourcesByJID.removeValue(forKey: jid)
 				}
 				
-				commitFriends(updated)
+				if updated != previousFriends || friends.isEmpty {
+					commitFriends(updated)
+				}
 				for cachedKey in cachedCardByPUUID.keys where puuidToJID[cachedKey] == nil {
 					cachedCardByPUUID.removeValue(forKey: cachedKey)
 					cachedCardDateByPUUID.removeValue(forKey: cachedKey)
@@ -869,7 +896,9 @@ final class SocialManager: ObservableObject {
 				saveCacheNow()
 				scheduleHydrateFriendCards()
 			} else {
-				commitFriends(updated)
+				if updated != previousFriends || friends.isEmpty {
+					commitFriends(updated)
+				}
 				scheduleCacheSave()
 			}
 			
