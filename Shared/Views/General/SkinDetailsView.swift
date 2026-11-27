@@ -18,10 +18,14 @@ struct SkinDetailsView: View {
 		accountManager.activeAccount?.id
 	}
 	
+	private var effectiveInventory: Inventory? {
+		inventory ?? favoritesManager.inventory(for: activeAccountID)
+	}
+	
 	private var isOwned: Bool {
-		if skin.themeID.isFree { return true }
-		guard let inventory else { return true }
-		return skin.levels.contains { inventory.owns($0.id) }
+		guard !skin.themeID.isFree, activeAccountID != nil else { return false }
+		guard let effectiveInventory else { return false }
+		return skin.levels.contains { effectiveInventory.owns($0.id) }
 	}
 	
 	private var isFavorited: Bool {
@@ -50,7 +54,7 @@ struct SkinDetailsView: View {
 		.toolbar {
 			if !skin.themeID.isFree {
 				ToolbarItemGroup(placement: .navigationBarTrailing) {
-					if isOwned || isFavorited {
+					if isOwned {
 						LoadoutActionCircleButton(
 							icon: isFavorited ? "star.fill" : "star",
 							isActive: isFavorited,
@@ -77,7 +81,14 @@ struct SkinDetailsView: View {
 			}
 		}
 		.valorantLoadTask(id: activeAccountID) { client in
-			await favoritesManager.refreshIfNeeded(using: client)
+			if let inventory {
+				favoritesManager.cacheInventory(inventory, for: client.userID)
+				await favoritesManager.refreshIfNeeded(using: client)
+			} else {
+				async let favsTask: Void = favoritesManager.refreshIfNeeded(using: client)
+				async let invTask: Void = favoritesManager.refreshInventoryIfNeeded(using: client)
+				_ = await (favsTask, invTask)
+			}
 		}
 	}
 	

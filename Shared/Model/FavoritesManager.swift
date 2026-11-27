@@ -4,14 +4,43 @@ import ValorantAPI
 @MainActor
 final class FavoritesManager: ObservableObject {
 	@Published private(set) var favoritesByAccount: [User.ID: Favorites] = [:]
+	@Published private(set) var inventoryByAccount: [User.ID: Inventory] = [:]
 	@Published private(set) var inFlightItemIDs: Set<LowercaseUUID> = []
 	@Published private(set) var isApplyingPreset = false
 	
 	private var itemIDsByAccount: [User.ID: Set<LowercaseUUID>] = [:]
+	private var inventoryFetchTasks: [User.ID: Task<Void, Never>] = [:]
+	private var prefersSkinIDOverBaseLevelID: Bool?
 	
 	private func setFavorites(_ favorites: Favorites?, for accountID: User.ID) {
 		favoritesByAccount[accountID] = favorites
 		itemIDsByAccount[accountID] = favorites?.itemIDs
+	}
+	
+	func cacheInventory(_ inventory: Inventory, for accountID: User.ID) {
+		inventoryByAccount[accountID] = inventory
+	}
+	
+	func inventory(for accountID: User.ID?) -> Inventory? {
+		guard let accountID else { return nil }
+		return inventoryByAccount[accountID]
+	}
+	
+	func refreshInventoryIfNeeded(using client: ValorantClient) async {
+		let accountID = client.userID
+		guard inventoryByAccount[accountID] == nil else { return }
+		if let existing = inventoryFetchTasks[accountID] {
+			await existing.value
+			return
+		}
+		let task = Task { [weak self] in
+			defer { self?.inventoryFetchTasks.removeValue(forKey: accountID) }
+			if let loaded = try? await client.getInventory() {
+				self?.inventoryByAccount[accountID] = loaded
+			}
+		}
+		inventoryFetchTasks[accountID] = task
+		await task.value
 	}
 	
 	func favorites(for accountID: User.ID?) -> Favorites? {
@@ -59,24 +88,51 @@ final class FavoritesManager: ObservableObject {
 	func toggleFavorite(itemID: LowercaseUUID, using client: ValorantClient) async throws {
 		try await toggleFavorite(
 			primaryID: itemID,
-			fallbackIDs: [],
+			addFallbackIDs: [],
+			matchIDs: [itemID],
 			using: client
 		)
 	}
 	
 	func toggleSkinFavorite(_ skin: WeaponSkin, using client: ValorantClient) async throws {
-		let levelIDs = skin.levels.map(\.id.rawID)
+		let baseLevelID = skin.levels.first?.id.rawID
+		let skinID = skin.id.rawID
+		let primaryID: LowercaseUUID
+		let addFallbackIDs: [LowercaseUUID]
+		if prefersSkinIDOverBaseLevelID == true {
+			primaryID = skinID
+			addFallbackIDs = (baseLevelID != nil && baseLevelID != skinID) ? [baseLevelID!] : []
+		} else {
+			primaryID = baseLevelID ?? skinID
+			addFallbackIDs = (baseLevelID != nil && baseLevelID != skinID) ? [skinID] : []
+		}
+		
+		var seen = Set<LowercaseUUID>()
+		let matchIDs = ([primaryID] + addFallbackIDs + skin.levels.map(\.id.rawID) + [skinID]).filter {
+			seen.insert($0).inserted
+		}
+		
 		try await toggleFavorite(
-			primaryID: skin.id.rawID,
-			fallbackIDs: levelIDs,
+			primaryID: primaryID,
+			addFallbackIDs: addFallbackIDs,
+			matchIDs: matchIDs,
 			using: client
-		)
+		) { [weak self] usedID in
+			guard let self, let baseLevelID, baseLevelID != skinID else { return }
+			if usedID == skinID {
+				self.prefersSkinIDOverBaseLevelID = true
+			} else if usedID == baseLevelID {
+				self.prefersSkinIDOverBaseLevelID = false
+			}
+		}
 	}
 	
 	private func toggleFavorite(
 		primaryID: LowercaseUUID,
-		fallbackIDs: [LowercaseUUID],
-		using client: ValorantClient
+		addFallbackIDs: [LowercaseUUID],
+		matchIDs: [LowercaseUUID],
+		using client: ValorantClient,
+		onAdded: ((LowercaseUUID) -> Void)? = nil
 	) async throws {
 		guard !inFlightItemIDs.contains(primaryID) else { return }
 		inFlightItemIDs.insert(primaryID)
@@ -84,14 +140,13 @@ final class FavoritesManager: ObservableObject {
 		
 		let accountID = client.userID
 		let previous = favoritesByAccount[accountID]
-		let candidateIDs = [primaryID] + fallbackIDs
-		let candidateSet = Set(candidateIDs)
-		let candidateKeySet = Set(candidateIDs.map(\.description))
+		let matchSet = Set(matchIDs)
+		let matchKeySet = Set(matchIDs.map(\.description))
 		
 		var matchedEntry: Favorites.FavoriteEntry?
 		var matchedKey: String?
 		if let current = previous {
-			for candidate in candidateIDs {
+			for candidate in matchIDs {
 				if let entry = current.favoritedContent[candidate.description] {
 					matchedEntry = entry
 					matchedKey = candidate.description
@@ -111,7 +166,7 @@ final class FavoritesManager: ObservableObject {
 		var optimistic = previous ?? Favorites(subject: accountID)
 		if isRemoving {
 			optimistic.favoritedContent = optimistic.favoritedContent.filter { key, entry in
-				key != matchedKey && !candidateKeySet.contains(key) && !candidateSet.contains(entry.itemID)
+				key != matchedKey && !matchKeySet.contains(key) && !matchSet.contains(entry.itemID)
 			}
 		} else {
 			optimistic.favoritedContent[primaryID.description] = Favorites.FavoriteEntry(
@@ -129,18 +184,20 @@ final class FavoritesManager: ObservableObject {
 					favoriteID: matchedEntry.id
 				)
 			} else {
-				updated = try await addWithFallbacks(
+				let result = try await addWithFallbacks(
 					primaryID: primaryID,
-					fallbackIDs: fallbackIDs,
+					fallbackIDs: addFallbackIDs,
 					using: client
 				)
+				updated = result.favorites
+				onAdded?(result.usedID)
 			}
 			setFavorites(updated, for: accountID)
 		} catch {
 			if isRemoving {
 				var rolledBack = favoritesByAccount[accountID] ?? Favorites(subject: accountID)
 				if let previous {
-					for (key, entry) in previous.favoritedContent where key == matchedKey || candidateKeySet.contains(key) || candidateSet.contains(entry.itemID) {
+					for (key, entry) in previous.favoritedContent where key == matchedKey || matchKeySet.contains(key) || matchSet.contains(entry.itemID) {
 						rolledBack.favoritedContent[key] = entry
 					}
 				}
@@ -174,19 +231,22 @@ final class FavoritesManager: ObservableObject {
 		primaryID: LowercaseUUID,
 		fallbackIDs: [LowercaseUUID],
 		using client: ValorantClient
-	) async throws -> Favorites {
+	) async throws -> (favorites: Favorites, usedID: LowercaseUUID) {
 		do {
-			return try await client.addFavorite(primaryID)
+			let updated = try await client.addFavorite(primaryID)
+			return (updated, primaryID)
 		} catch where Self.isIgnorableFavoriteMutationError(error) && !fallbackIDs.isEmpty {
-			var lastError: Error = error
-			for fallback in fallbackIDs where fallback != primaryID {
+			let firstError = error
+			var seen: Set<LowercaseUUID> = [primaryID]
+			for fallback in fallbackIDs where seen.insert(fallback).inserted {
 				do {
-					return try await client.addFavorite(fallback)
+					let updated = try await client.addFavorite(fallback)
+					return (updated, fallback)
 				} catch {
-					lastError = error
+					continue
 				}
 			}
-			throw lastError
+			throw firstError
 		}
 	}
 	
