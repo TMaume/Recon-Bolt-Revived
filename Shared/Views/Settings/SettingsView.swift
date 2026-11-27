@@ -13,7 +13,6 @@ struct SettingsView: View {
 	@State private var loginTarget: AccountSettingsView.LoginTarget?
 	@StateObject private var loginWebViewModel = RiotLoginWebViewModel()
 	@State private var showingAccentColorPicker = false
-	@EnvironmentObject private var notificationManager: StoreNotificationManager
 	
 	@Namespace private var storefrontID
 	
@@ -42,8 +41,7 @@ struct SettingsView: View {
 							HStack {
 								Text("Notifications")
 								Spacer()
-								Text(notificationStatusText)
-									.foregroundStyle(.secondary)
+								NotificationStatusLabel(settings: settings)
 							}
 						} icon: {
 							Image(systemName: "bell.badge")
@@ -108,13 +106,6 @@ struct SettingsView: View {
 			}
 		}
 		.navigationTitle("Settings")
-	}
-	
-	private var notificationStatusText: String {
-		if notificationManager.authorizationStatus == .denied {
-			return "Blocked"
-		}
-		return settings.anyStoreNotificationEnabled ? "On" : "Off"
 	}
 	
 	@ViewBuilder
@@ -194,6 +185,23 @@ struct SettingsView: View {
 			}
 		}
 		.disabled(!settings.hasCustomAccentColor)
+	}
+}
+
+private struct NotificationStatusLabel: View {
+	@ObservedObject var settings: AppSettings
+	@EnvironmentObject private var notificationManager: StoreNotificationManager
+	
+	var body: some View {
+		Text(statusText)
+			.foregroundStyle(.secondary)
+	}
+	
+	private var statusText: String {
+		if notificationManager.authorizationStatus == .denied {
+			return "Blocked"
+		}
+		return settings.anyStoreNotificationEnabled ? "On" : "Off"
 	}
 }
 

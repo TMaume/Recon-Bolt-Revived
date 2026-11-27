@@ -5,7 +5,6 @@ struct WishlistView: View {
 	@EnvironmentObject private var wishlistManager: WishlistManager
 	@EnvironmentObject private var accountManager: AccountManager
 	@EnvironmentObject private var shopHistoryStore: ShopHistoryStore
-	@EnvironmentObject private var notificationManager: StoreNotificationManager
 	@Environment(\.assets) private var assets
 	@Environment(\.colorScheme) private var colorScheme
 	
@@ -490,7 +489,7 @@ struct WishlistView: View {
 				let storefront = try await client.getStorefront()
 				checkedCount += 1
 				shopHistoryStore.record(storefront: storefront, for: accountID)
-				await notificationManager.processObservedStorefront(
+				await StoreNotificationManager.shared.processObservedStorefront(
 					storefront,
 					for: accountID,
 					fetchDate: Date(),

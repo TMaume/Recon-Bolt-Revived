@@ -39,7 +39,7 @@ struct ReconBoltApp: App {
 	@StateObject var settings = AppSettings()
 	@StateObject var store = InAppStore()
 	@StateObject var configManager = GameConfigManager()
-	@StateObject private var notificationManager = StoreNotificationManager.shared
+	private let notificationManager = StoreNotificationManager.shared
 	private let services = AppServices()
 	@State private var hasLaunched = false
 	
@@ -93,6 +93,8 @@ struct ReconBoltApp: App {
 					))
 					.environment(\.favoritesManagerRef, services.favoritesManager)
 					.environment(\.progressTimelineStoreRef, services.progressTimelineStore)
+					.environment(\.shopHistoryStoreRef, services.shopHistoryStore)
+					.environment(\.wishlistManagerRef, services.wishlistManager)
 					.preferredColorScheme(settings.theme.colorScheme)
 					.tint(settings.effectiveAccentColor)
 					.accentColor(settings.effectiveAccentColor)
@@ -210,6 +212,16 @@ extension EnvironmentValues {
 		set { self[ProgressTimelineStoreRefKey.self] = newValue }
 	}
 	
+	var shopHistoryStoreRef: ShopHistoryStore? {
+		get { self[ShopHistoryStoreRefKey.self] }
+		set { self[ShopHistoryStoreRefKey.self] = newValue }
+	}
+	
+	var wishlistManagerRef: WishlistManager? {
+		get { self[WishlistManagerRefKey.self] }
+		set { self[WishlistManagerRefKey.self] = newValue }
+	}
+	
 	private enum OwnsProVersionKey: EnvironmentKey {
 		static let defaultValue = true
 	}
@@ -224,5 +236,13 @@ extension EnvironmentValues {
 	
 	private enum ProgressTimelineStoreRefKey: EnvironmentKey {
 		static let defaultValue: ProgressTimelineStore? = nil
+	}
+	
+	private enum ShopHistoryStoreRefKey: EnvironmentKey {
+		static let defaultValue: ShopHistoryStore? = nil
+	}
+	
+	private enum WishlistManagerRefKey: EnvironmentKey {
+		static let defaultValue: WishlistManager? = nil
 	}
 }

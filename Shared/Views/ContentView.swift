@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import HandyOperators
 import ValorantAPI
 import WidgetKit
@@ -10,13 +11,16 @@ struct ContentView: View {
 	let store: InAppStore
 	
 	@Environment(\.backupStores) private var backupStores
-	@EnvironmentObject private var notificationManager: StoreNotificationManager
 	
 	@SceneStorage("tab")
 	var tab = Tab.career
 	
-	@State var handleDeepLink: DeepLink.Handler?
+	@State private var deepLinkBox = DeepLinkHandlerBox()
 	@State private var incomingBackupFile: IncomingBackupFile?
+	
+	private final class DeepLinkHandlerBox {
+		var handler: DeepLink.Handler?
+	}
 	
 	private struct IncomingBackupFile: Identifiable {
 		let id = UUID()
@@ -33,7 +37,7 @@ struct ContentView: View {
 				) }
 				.tag(Tab.career)
 			
-			onlineView { LiveView(userID: $0) }
+			onlineView { LiveView(userID: $0, isTabActive: tab == .live) }
 				.withToolbar()
 				.tabItem { Label(
 					String(localized: "Live", comment: "Top-Level Tab Title"),
@@ -73,7 +77,7 @@ struct ContentView: View {
 		.onSceneActivation {
 			await assetManager.tryLoadAssets()
 		}
-		.readingDeepLinkHandler { handleDeepLink = $0 }
+		.readingDeepLinkHandler { deepLinkBox.handler = $0 }
 		.environment(\.deepLink, handle(_:))
 		.onOpenURL(perform: handle(_:))
 		.sheet(item: $incomingBackupFile) { file in
@@ -86,7 +90,7 @@ struct ContentView: View {
 		.onAppear {
 			consumeNotificationRouteIfNeeded()
 		}
-		.onChange(of: notificationManager.pendingRoute) { _ in
+		.onReceive(StoreNotificationManager.shared.$pendingRoute.removeDuplicates().compactMap { $0 }) { _ in
 			consumeNotificationRouteIfNeeded()
 		}
 	}
@@ -158,7 +162,7 @@ struct ContentView: View {
 	}
 	
 	private func consumeNotificationRouteIfNeeded() {
-		guard let route = notificationManager.consumePendingRoute() else { return }
+		guard let route = StoreNotificationManager.shared.consumePendingRoute() else { return }
 		if let accountID = route.accountID,
 		   accountManager.storedAccounts.contains(accountID) {
 			try? accountManager.setActive(accountID)
@@ -169,7 +173,7 @@ struct ContentView: View {
 	private func handleWithDelay(_ link: DeepLink) {
 		// delay to give newly-displayed tabs time to propagate their preferences
 		DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-			handleDeepLink?(link)
+			deepLinkBox.handler?(link)
 		}
 	}
 	

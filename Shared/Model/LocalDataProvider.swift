@@ -72,9 +72,17 @@ final class LocalDataProvider {
 	}
 	
 	func store(_ identities: [Player.Identity], asOf updateTime: Date) {
-		Task { await playerIdentityManager.store(identities, asOf: updateTime) }
-		if !identities.isEmpty {
-			Self.onIdentitiesStored?(identities, updateTime)
+		Task { @MainActor in
+			var changed: [Player.Identity] = []
+			for identity in identities {
+				if playerIdentityManager.loadedObject(for: identity.id) != identity {
+					changed.append(identity)
+				}
+			}
+			playerIdentityManager.store(identities, asOf: updateTime)
+			if !changed.isEmpty {
+				Self.onIdentitiesStored?(changed, updateTime)
+			}
 		}
 	}
 	
@@ -106,7 +114,7 @@ final class LocalDataProvider {
 	}
 	
 	static func dataFetched(_ loadout: Loadout) {
-		Task {
+		Task { @MainActor in
 			let existing = await shared.playerIdentityManager.cachedObject(for: loadout.subject)
 			let identity = Player.Identity(
 				id: loadout.subject,
@@ -115,8 +123,10 @@ final class LocalDataProvider {
 				accountLevel: existing?.accountLevel ?? 0,
 				isIncognito: loadout.isIncognito
 			)
-			await shared.playerIdentityManager.store(identity, asOf: .now)
-			onIdentitiesStored?([identity], .now)
+			shared.playerIdentityManager.store(identity, asOf: .now)
+			if existing != identity {
+				onIdentitiesStored?([identity], .now)
+			}
 		}
 	}
 }

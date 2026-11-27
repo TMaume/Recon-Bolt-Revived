@@ -398,6 +398,11 @@ final class StoreNotificationManager: NSObject, ObservableObject, UNUserNotifica
 	private let stateFilename = "StoreNotifications.v1.json"
 	private var didRegisterBackgroundTasks = false
 	private var hasLoadedState = false
+	private var hasSyncedSchedulesThisSession = false
+	private var hasPopulatedPendingRequests = false
+	private var isSyncingSchedules = false
+	private var needsScheduleResync = false
+	private var lastSubmittedBGDate: Date?
 	private var loadStateTask: Task<Void, Never>?
 	
 	private weak var accountManager: AccountManager?
@@ -492,38 +497,20 @@ final class StoreNotificationManager: NSObject, ObservableObject, UNUserNotifica
 	
 	func refreshStatus() async {
 		let notificationSettings = await center.notificationSettings()
-		authorizationStatus = notificationSettings.authorizationStatus
-		backgroundRefreshStatus = UIApplication.shared.backgroundRefreshStatus
+		if authorizationStatus != notificationSettings.authorizationStatus {
+			authorizationStatus = notificationSettings.authorizationStatus
+		}
+		let bgStatus = UIApplication.shared.backgroundRefreshStatus
+		if backgroundRefreshStatus != bgStatus {
+			backgroundRefreshStatus = bgStatus
+		}
 		
 		let requests = await center.pendingNotificationRequests()
-		pendingRequests = requests.map { request in
-			let nextDate: Date?
-			if let calendarTrigger = request.trigger as? UNCalendarNotificationTrigger {
-				nextDate = calendarTrigger.nextTriggerDate()
-			} else if let intervalTrigger = request.trigger as? UNTimeIntervalNotificationTrigger {
-				nextDate = intervalTrigger.nextTriggerDate()
-			} else {
-				nextDate = nil
-			}
-			let isTest = (request.content.userInfo[UserInfoKey.isTest] as? Bool) == true
-				|| request.identifier.hasPrefix(Prefix.debug)
-			return ScheduledNotificationSummary(
-				id: request.identifier,
-				title: request.content.title,
-				subtitle: request.content.subtitle.isEmpty ? nil : request.content.subtitle,
-				body: request.content.body,
-				nextTriggerDate: nextDate,
-				isTest: isTest
-			)
+		let mapped = Self.summarizeRequests(requests)
+		if pendingRequests != mapped {
+			pendingRequests = mapped
 		}
-		.sorted { lhs, rhs in
-			switch (lhs.nextTriggerDate, rhs.nextTriggerDate) {
-			case let (l?, r?): return l < r
-			case (_?, nil): return true
-			case (nil, _?): return false
-			case (nil, nil): return lhs.id < rhs.id
-			}
-		}
+		hasPopulatedPendingRequests = true
 	}
 	
 	@discardableResult
@@ -559,9 +546,17 @@ final class StoreNotificationManager: NSObject, ObservableObject, UNUserNotifica
 	) async {
 		await ensureStateLoaded()
 		
+		var nextState = state
+		
 		let remainingDaily = storefront.dailySkinStore.remainingDuration
 		if remainingDaily > 0 && remainingDaily <= TimeInterval(172_800) {
-			state.lastKnownDailyRefreshDate = fetchDate.addingTimeInterval(remainingDaily)
+			let newRefreshDate = Self.quantizedToMinute(fetchDate.addingTimeInterval(remainingDaily))
+			if let existing = nextState.lastKnownDailyRefreshDate,
+			   abs(existing.timeIntervalSince(newRefreshDate)) <= 120 {
+				// Keep existing timestamp to avoid sub-minute jitter across refreshes.
+			} else {
+				nextState.lastKnownDailyRefreshDate = newRefreshDate
+			}
 		}
 		
 		let rotationKey = ShopHistoryStore.rotationKey(now: fetchDate, remainingDuration: remainingDaily)
@@ -573,54 +568,73 @@ final class StoreNotificationManager: NSObject, ObservableObject, UNUserNotifica
 			return TrackedBundle(
 				id: bundle.id.description,
 				name: name,
-				expiryDate: fetchDate.addingTimeInterval(bundle.remainingDuration),
+				expiryDate: Self.quantizedToMinute(fetchDate.addingTimeInterval(bundle.remainingDuration)),
 				totalVP: totalVP
 			)
 		}
-		state.trackedBundles = bundles
+		nextState.trackedBundles = bundles
 		
 		let activeBundleIDs = Set(bundles.map(\.id))
-		state.notifiedLeavingBundleIDs = state.notifiedLeavingBundleIDs.intersection(activeBundleIDs)
+		nextState.notifiedLeavingBundleIDs = nextState.notifiedLeavingBundleIDs.intersection(activeBundleIDs)
 		
 		if let nm = storefront.nightMarket, nm.remainingDuration > 0 {
-			state.trackedNightMarketExpiry = fetchDate.addingTimeInterval(nm.remainingDuration)
+			nextState.trackedNightMarketExpiry = Self.quantizedToMinute(fetchDate.addingTimeInterval(nm.remainingDuration))
 		} else {
-			state.trackedNightMarketExpiry = nil
+			nextState.trackedNightMarketExpiry = nil
 		}
 		
 		if !isBackground {
-			state.lastDailyRotationSeenOrNotified = rotationKey
 			let dailyID = Prefix.dailyShop + rotationKey
-			center.removePendingNotificationRequests(withIdentifiers: [dailyID])
+			if nextState.lastDailyRotationSeenOrNotified != rotationKey {
+				center.removePendingNotificationRequests(withIdentifiers: [dailyID])
+			}
+			nextState.lastDailyRotationSeenOrNotified = rotationKey
 			if let nm = storefront.nightMarket, nm.remainingDuration > 0 {
 				let nmExpiry = fetchDate.addingTimeInterval(nm.remainingDuration)
-				state.lastNightMarketLiveWindowNotified = Self.nightMarketWindowKey(for: nmExpiry)
+				nextState.lastNightMarketLiveWindowNotified = Self.nightMarketWindowKey(for: nmExpiry)
 			}
 		}
 		
-		persistState()
-		await syncSchedules()
+		let stateChanged = nextState != state
+		if stateChanged {
+			state = nextState
+			persistState()
+		}
+		if stateChanged || !hasSyncedSchedulesThisSession {
+			await syncSchedules()
+		}
 	}
 	
 	func syncSchedules() async {
+		if isSyncingSchedules {
+			needsScheduleResync = true
+			return
+		}
+		isSyncingSchedules = true
+		defer { isSyncingSchedules = false }
+		
+		repeat {
+			needsScheduleResync = false
+			await performSyncSchedules()
+		} while needsScheduleResync
+	}
+	
+	private func performSyncSchedules() async {
 		await ensureStateLoaded()
 		
 		let prefs = readPreferences()
 		let settingsStatus = await center.notificationSettings().authorizationStatus
-		authorizationStatus = settingsStatus
-		backgroundRefreshStatus = UIApplication.shared.backgroundRefreshStatus
+		if authorizationStatus != settingsStatus {
+			authorizationStatus = settingsStatus
+		}
+		let bgStatus = UIApplication.shared.backgroundRefreshStatus
+		if backgroundRefreshStatus != bgStatus {
+			backgroundRefreshStatus = bgStatus
+		}
 		
 		let existingRequests = await center.pendingNotificationRequests()
-		let managedIDs = existingRequests
-			.map(\.identifier)
-			.filter { id in
-				id.hasPrefix(Prefix.dailyShop)
-					|| id.hasPrefix(Prefix.bundleLeaving)
-					|| id.hasPrefix(Prefix.nightMarketLeaving)
-			}
-		if !managedIDs.isEmpty {
-			center.removePendingNotificationRequests(withIdentifiers: managedIDs)
-		}
+		let managedRequests = existingRequests.filter { Self.isManagedIdentifier($0.identifier) }
+		let existingByID = Dictionary(managedRequests.map { ($0.identifier, $0) }, uniquingKeysWith: { first, _ in first })
 		
 		let isAuthorized: Bool
 		switch settingsStatus {
@@ -631,13 +645,25 @@ final class StoreNotificationManager: NSObject, ObservableObject, UNUserNotifica
 		}
 		
 		guard isAuthorized, prefs.anyEnabled else {
-			BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.bgRefreshTaskIdentifier)
-			await refreshStatus()
+			let managedIDs = managedRequests.map(\.identifier)
+			if !managedIDs.isEmpty {
+				center.removePendingNotificationRequests(withIdentifiers: managedIDs)
+			}
+			if !hasSyncedSchedulesThisSession || lastSubmittedBGDate != nil {
+				BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.bgRefreshTaskIdentifier)
+				lastSubmittedBGDate = nil
+			}
+			if !managedIDs.isEmpty || !hasPopulatedPendingRequests {
+				await refreshStatus()
+			}
+			hasSyncedSchedulesThisSession = true
 			return
 		}
 		
+		var nextState = state
 		let now = Date()
 		let baseNextRefresh = nextDailyRefreshDate(after: now)
+		var desiredRequests: [(id: String, request: UNNotificationRequest, fireDate: Date)] = []
 		
 		if prefs.notifyShopRefresh {
 			let graceDelay: TimeInterval = prefs.notifyWishlistMatch ? TimeInterval(180) : TimeInterval(5)
@@ -651,7 +677,7 @@ final class StoreNotificationManager: NSObject, ObservableObject, UNUserNotifica
 					now: refreshDate.addingTimeInterval(TimeInterval(60)),
 					remainingDuration: TimeInterval(86_340)
 				)
-				if dayKey == state.lastDailyRotationSeenOrNotified {
+				if dayKey == nextState.lastDailyRotationSeenOrNotified {
 					continue
 				}
 				let fireDate = refreshDate.addingTimeInterval(graceDelay)
@@ -663,23 +689,23 @@ final class StoreNotificationManager: NSObject, ObservableObject, UNUserNotifica
 				)
 				let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
 				let content = makeNotificationContent(from: preview, accountID: nil, isTest: false)
+				let identifier = Prefix.dailyShop + dayKey
 				let request = UNNotificationRequest(
-					identifier: Prefix.dailyShop + dayKey,
+					identifier: identifier,
 					content: content,
 					trigger: trigger
 				)
-				try? await center.add(request)
-				state.scheduledDailyFireDates[dayKey] = fireDate
+				desiredRequests.append((id: identifier, request: request, fireDate: fireDate))
+				nextState.scheduledDailyFireDates[dayKey] = fireDate
 			}
-			pruneSignatureCaches()
-			persistState()
+			Self.pruneSignatureCaches(in: &nextState)
 		}
 		
 		let leadSeconds = TimeInterval(max(1, prefs.leadTimeHours)) * TimeInterval(3_600)
 		
 		if prefs.notifyBundleLeavingSoon {
-			for bundle in state.trackedBundles where bundle.expiryDate > now {
-				if state.notifiedLeavingBundleIDs.contains(bundle.id) {
+			for bundle in nextState.trackedBundles where bundle.expiryDate > now {
+				if nextState.notifiedLeavingBundleIDs.contains(bundle.id) {
 					continue
 				}
 				let fireDate = bundle.expiryDate.addingTimeInterval(-leadSeconds)
@@ -690,27 +716,51 @@ final class StoreNotificationManager: NSObject, ObservableObject, UNUserNotifica
 					totalVP: bundle.totalVP,
 					remainingHours: prefs.leadTimeHours
 				)
+				let identifier = Prefix.bundleLeaving + bundle.id
 				let request = UNNotificationRequest(
-					identifier: Prefix.bundleLeaving + bundle.id,
+					identifier: identifier,
 					content: makeNotificationContent(from: preview, accountID: nil, isTest: false),
 					trigger: calendarTrigger(for: fireDate)
 				)
-				try? await center.add(request)
+				desiredRequests.append((id: identifier, request: request, fireDate: fireDate))
 			}
 		}
 		
-		if prefs.notifyNightMarket, let nmExpiry = state.trackedNightMarketExpiry, nmExpiry > now {
+		if prefs.notifyNightMarket, let nmExpiry = nextState.trackedNightMarketExpiry, nmExpiry > now {
 			let fireDate = nmExpiry.addingTimeInterval(-leadSeconds)
 			if fireDate > now {
 				let windowKey = Self.nightMarketWindowKey(for: nmExpiry)
 				let preview = StoreNotificationContentBuilder.nightMarketLeavingSoon(remainingHours: prefs.leadTimeHours)
+				let identifier = Prefix.nightMarketLeaving + windowKey
 				let request = UNNotificationRequest(
-					identifier: Prefix.nightMarketLeaving + windowKey,
+					identifier: identifier,
 					content: makeNotificationContent(from: preview, accountID: nil, isTest: false),
 					trigger: calendarTrigger(for: fireDate)
 				)
-				try? await center.add(request)
+				desiredRequests.append((id: identifier, request: request, fireDate: fireDate))
 			}
+		}
+		
+		let desiredIDs = Set(desiredRequests.map(\.id))
+		var idsToRemove = existingByID.keys.filter { !desiredIDs.contains($0) }
+		var requestsToAdd: [UNNotificationRequest] = []
+		
+		for desired in desiredRequests {
+			if let existing = existingByID[desired.id],
+			   Self.requestMatches(existing, desiredRequest: desired.request, desiredFireDate: desired.fireDate) {
+				continue
+			}
+			if existingByID[desired.id] != nil {
+				idsToRemove.append(desired.id)
+			}
+			requestsToAdd.append(desired.request)
+		}
+		
+		if !idsToRemove.isEmpty {
+			center.removePendingNotificationRequests(withIdentifiers: idsToRemove)
+		}
+		for request in requestsToAdd {
+			try? await center.add(request)
 		}
 		
 		if prefs.notifyWishlistMatch || prefs.notifyNightMarket || prefs.notifyBundleLeavingSoon {
@@ -719,17 +769,26 @@ final class StoreNotificationManager: NSObject, ObservableObject, UNUserNotifica
 				remainingDuration: baseNextRefresh.timeIntervalSince(now)
 			)
 			let earliestDate: Date
-			if state.lastDailyRotationSeenOrNotified != currentUTCRotationKey {
+			if nextState.lastDailyRotationSeenOrNotified != currentUTCRotationKey {
 				earliestDate = now.addingTimeInterval(TimeInterval(15 * 60))
 			} else {
 				earliestDate = baseNextRefresh.addingTimeInterval(TimeInterval(20))
 			}
-			scheduleBackgroundRefresh(earliestBeginDate: earliestDate)
-		} else {
+			scheduleBackgroundRefresh(earliestBeginDate: earliestDate, into: &nextState)
+		} else if !hasSyncedSchedulesThisSession || lastSubmittedBGDate != nil {
 			BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.bgRefreshTaskIdentifier)
+			lastSubmittedBGDate = nil
 		}
 		
-		await refreshStatus()
+		if nextState != state {
+			state = nextState
+			persistState()
+		}
+		
+		if !idsToRemove.isEmpty || !requestsToAdd.isEmpty || !hasPopulatedPendingRequests {
+			await refreshStatus()
+		}
+		hasSyncedSchedulesThisSession = true
 	}
 	
 	func performStoreCheck(
@@ -1209,20 +1268,80 @@ final class StoreNotificationManager: NSObject, ObservableObject, UNUserNotifica
 		}
 	}
 	
-	private func scheduleBackgroundRefresh(earliestBeginDate: Date) {
+	private func scheduleBackgroundRefresh(earliestBeginDate: Date, into nextState: inout StoreNotificationState) {
+		if let lastSubmittedBGDate,
+		   abs(lastSubmittedBGDate.timeIntervalSince(earliestBeginDate)) <= 120,
+		   nextState.lastBackgroundScheduleError == nil {
+			return
+		}
 		let request = BGAppRefreshTaskRequest(identifier: Self.bgRefreshTaskIdentifier)
 		request.earliestBeginDate = earliestBeginDate
 		do {
 			try BGTaskScheduler.shared.submit(request)
-			state.lastBackgroundScheduleError = nil
-			persistState()
+			lastSubmittedBGDate = earliestBeginDate
+			nextState.lastBackgroundScheduleError = nil
 		} catch {
-			state.lastBackgroundScheduleError = error.localizedDescription
-			persistState()
+			nextState.lastBackgroundScheduleError = error.localizedDescription
 		}
 	}
 	
 	// MARK: - Helpers
+	
+	private static func isManagedIdentifier(_ identifier: String) -> Bool {
+		identifier.hasPrefix(Prefix.dailyShop)
+			|| identifier.hasPrefix(Prefix.bundleLeaving)
+			|| identifier.hasPrefix(Prefix.nightMarketLeaving)
+	}
+	
+	private static func quantizedToMinute(_ date: Date) -> Date {
+		Date(timeIntervalSince1970: (date.timeIntervalSince1970 / 60).rounded() * 60)
+	}
+	
+	private static func nextTriggerDate(for request: UNNotificationRequest) -> Date? {
+		if let calendarTrigger = request.trigger as? UNCalendarNotificationTrigger {
+			return calendarTrigger.nextTriggerDate()
+		} else if let intervalTrigger = request.trigger as? UNTimeIntervalNotificationTrigger {
+			return intervalTrigger.nextTriggerDate()
+		}
+		return nil
+	}
+	
+	private static func summarizeRequests(_ requests: [UNNotificationRequest]) -> [ScheduledNotificationSummary] {
+		requests.map { request in
+			let isTest = (request.content.userInfo[UserInfoKey.isTest] as? Bool) == true
+				|| request.identifier.hasPrefix(Prefix.debug)
+			return ScheduledNotificationSummary(
+				id: request.identifier,
+				title: request.content.title,
+				subtitle: request.content.subtitle.isEmpty ? nil : request.content.subtitle,
+				body: request.content.body,
+				nextTriggerDate: nextTriggerDate(for: request),
+				isTest: isTest
+			)
+		}
+		.sorted { lhs, rhs in
+			switch (lhs.nextTriggerDate, rhs.nextTriggerDate) {
+			case let (l?, r?): return l < r
+			case (_?, nil): return true
+			case (nil, _?): return false
+			case (nil, nil): return lhs.id < rhs.id
+			}
+		}
+	}
+	
+	private static func requestMatches(
+		_ existing: UNNotificationRequest,
+		desiredRequest: UNNotificationRequest,
+		desiredFireDate: Date
+	) -> Bool {
+		guard existing.content.title == desiredRequest.content.title,
+			  existing.content.subtitle == desiredRequest.content.subtitle,
+			  existing.content.body == desiredRequest.content.body,
+			  let existingDate = nextTriggerDate(for: existing) else {
+			return false
+		}
+		return abs(existingDate.timeIntervalSince(desiredFireDate)) <= 90
+	}
 	
 	private func ensureStateLoaded() async {
 		if hasLoadedState { return }
@@ -1247,6 +1366,10 @@ final class StoreNotificationManager: NSObject, ObservableObject, UNUserNotifica
 	}
 	
 	private func pruneSignatureCaches() {
+		Self.pruneSignatureCaches(in: &state)
+	}
+	
+	private static func pruneSignatureCaches(in state: inout StoreNotificationState) {
 		if state.lastWishlistNotifiedSignatures.count > 14 {
 			let sortedKeys = state.lastWishlistNotifiedSignatures.keys.sorted()
 			for key in sortedKeys.dropLast(14) {
