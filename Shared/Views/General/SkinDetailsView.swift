@@ -22,14 +22,35 @@ struct SkinDetailsView: View {
 		inventory ?? favoritesManager.inventory(for: activeAccountID)
 	}
 	
+	private var currentChroma: WeaponSkin.Chroma? {
+		skin.chromas.elementIfValid(at: selectedChromaIndex) ?? skin.chromas.first
+	}
+	
 	private var isOwned: Bool {
 		guard !skin.themeID.isFree, activeAccountID != nil else { return false }
 		guard let effectiveInventory else { return false }
 		return skin.levels.contains { effectiveInventory.owns($0.id) }
 	}
 	
+	private var isCurrentChromaOwned: Bool {
+		guard isOwned else { return false }
+		guard let currentChroma else { return true }
+		if currentChroma.id == skin.chromas.first?.id { return true }
+		return effectiveInventory?.owns(currentChroma.id) == true
+	}
+	
 	private var isFavorited: Bool {
-		favoritesManager.isSkinFavorited(skin, for: activeAccountID)
+		if let currentChroma {
+			return favoritesManager.isChromaFavorited(currentChroma.id, for: activeAccountID)
+		}
+		return favoritesManager.isSkinFavorited(skin, for: activeAccountID)
+	}
+	
+	private var isFavoriteLoading: Bool {
+		if let currentChroma {
+			return favoritesManager.isLoading(currentChroma.id.rawID)
+		}
+		return favoritesManager.isLoading(skin: skin)
 	}
 	
 	private var isWishlisted: Bool {
@@ -59,12 +80,12 @@ struct SkinDetailsView: View {
 							icon: isFavorited ? "star.fill" : "star",
 							isActive: isFavorited,
 							activeColor: .accentColor,
-							isLoading: favoritesManager.isLoading(skin: skin),
-							isDisabled: activeAccountID == nil
+							isLoading: isFavoriteLoading,
+							isDisabled: activeAccountID == nil || !isCurrentChromaOwned
 						) {
 							Task {
 								await load { client in
-									try await favoritesManager.toggleSkinFavorite(skin, using: client)
+									try await favoritesManager.toggleSkinFavorite(skin, chroma: currentChroma, using: client)
 								}
 							}
 						}
