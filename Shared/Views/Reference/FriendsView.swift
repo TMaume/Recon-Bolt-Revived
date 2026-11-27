@@ -16,6 +16,8 @@ struct FriendsView: View {
 	@State private var showingChanges = false
 	@State private var contextChatFriend: XMPPFriend?
 	@State private var contextProfileUserID: User.ID?
+	@State private var editingNoteFriend: XMPPFriend?
+	@State private var showingNotesManager = false
 	@State private var cachedSections = FriendSectionsSnapshot()
 	
 	private struct SectionsKey: Equatable {
@@ -63,11 +65,11 @@ struct FriendsView: View {
 				
 				valorantPartiesSection(currentAct: currentAct)
 				
-				friendRequestsSection
-				
 				otherGamesSection(currentAct: currentAct)
 				
 				offlineFriendsSection(currentAct: currentAct)
+				
+				friendRequestsSection
 				
 				if socialManager.friends.isEmpty && socialManager.connectionState == .connected {
 					Text("No friends returned on your Riot roster yet.")
@@ -157,6 +159,12 @@ struct FriendsView: View {
 				Text(actionError)
 			}
 		}
+		.sheet(item: $editingNoteFriend) { friend in
+			FriendNoteEditorSheet(friend: friend)
+		}
+		.sheet(isPresented: $showingNotesManager) {
+			FriendNotesManagerSheet()
+		}
 	}
 	
 	// MARK: - Toolbar
@@ -226,6 +234,12 @@ struct FriendsView: View {
 					} label: {
 						Label("Reconnect Chat", systemImage: "wifi")
 					}
+				}
+				
+				Button {
+					showingNotesManager = true
+				} label: {
+					Label("Friend Notes", systemImage: "note.text")
 				}
 				
 				Button {
@@ -445,6 +459,12 @@ struct FriendsView: View {
 			return OtherGameGroup(game: game, members: sorted)
 		}
 		
+		incoming.sort {
+			$0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+		}
+		outgoing.sort {
+			$0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+		}
 		offline.sort { compareFriends($0, $1, isOffline: true) }
 		
 		cachedSections = FriendSectionsSnapshot(
@@ -574,57 +594,14 @@ struct FriendsView: View {
 		
 		if !incoming.isEmpty {
 			VStack(alignment: .leading, spacing: 8) {
-				Text("Friend Requests — \(incoming.count)")
+				Text("Incoming Requests — \(incoming.count)")
 					.font(.subheadline.weight(.medium))
 					.foregroundStyle(.secondary)
 					.padding(.horizontal, 4)
 				
 				LazyVStack(spacing: 0) {
 					ForEach(Array(incoming.enumerated()), id: \.element.id) { index, friend in
-						HStack(spacing: 12) {
-							if let cardID = friend.playerCardID {
-								PlayerCardImage.small(cardID)
-									.frame(width: 44, height: 44)
-									.clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-							}
-							
-							VStack(alignment: .leading, spacing: 2) {
-								nameTitle(friend)
-								Text("Incoming Friend Request")
-									.font(.caption)
-									.foregroundStyle(.secondary)
-							}
-							
-							Spacer()
-							
-							AsyncButton {
-								do {
-									try await socialManager.acceptFriend(friend)
-								} catch {
-									actionError = error.localizedDescription
-								}
-							} label: {
-								Image(systemName: "checkmark.circle.fill")
-									.font(.title2)
-									.foregroundStyle(.green)
-							}
-							.buttonStyle(.plain)
-							
-							AsyncButton {
-								do {
-									try await socialManager.removeFriend(friend)
-								} catch {
-									actionError = error.localizedDescription
-								}
-							} label: {
-								Image(systemName: "xmark.circle.fill")
-									.font(.title2)
-									.foregroundStyle(Color.valorantRed)
-							}
-							.buttonStyle(.plain)
-						}
-						.padding(14)
-						
+						friendRequestRow(friend, isIncoming: true)
 						if index < incoming.count - 1 {
 							Divider().opacity(0.22).padding(.leading, 70)
 						}
@@ -636,53 +613,170 @@ struct FriendsView: View {
 		
 		if !outgoing.isEmpty {
 			VStack(alignment: .leading, spacing: 8) {
-				Text("Sent Requests — \(outgoing.count)")
+				Text("Outgoing Requests — \(outgoing.count)")
 					.font(.subheadline.weight(.medium))
 					.foregroundStyle(.secondary)
 					.padding(.horizontal, 4)
 				
 				LazyVStack(spacing: 0) {
 					ForEach(Array(outgoing.enumerated()), id: \.element.id) { index, friend in
-						HStack(spacing: 12) {
-							if let cardID = friend.playerCardID {
-								PlayerCardImage.small(cardID)
-									.frame(width: 44, height: 44)
-									.clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-							}
-							
-							VStack(alignment: .leading, spacing: 2) {
-								nameTitle(friend)
-								Text("Pending")
-									.font(.caption)
-									.foregroundStyle(.secondary)
-							}
-							
-							Spacer()
-							
-							AsyncButton {
-								do {
-									try await socialManager.removeFriend(friend)
-								} catch {
-									actionError = error.localizedDescription
-								}
-							} label: {
-								Text("Cancel")
-									.font(.caption.weight(.semibold))
-									.foregroundStyle(Color.valorantRed)
-									.padding(.horizontal, 10)
-									.padding(.vertical, 6)
-									.background(Color.tertiaryGroupedBackground, in: Capsule())
-							}
-							.buttonStyle(.plain)
-						}
-						.padding(14)
-						
+						friendRequestRow(friend, isIncoming: false)
 						if index < outgoing.count - 1 {
 							Divider().opacity(0.22).padding(.leading, 70)
 						}
 					}
 				}
 				.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+			}
+		}
+	}
+	
+	private func friendRequestRow(_ friend: XMPPFriend, isIncoming: Bool) -> some View {
+		let profileID = friend.resolvedUserID
+		
+		return HStack(spacing: 12) {
+			Button {
+				if let profileID {
+					contextProfileUserID = profileID
+				}
+			} label: {
+				HStack(spacing: 12) {
+					requestAvatar(friend, isIncoming: isIncoming)
+					
+					VStack(alignment: .leading, spacing: 3) {
+						HStack(spacing: 4) {
+							nameTitle(friend)
+							if profileID != nil {
+								Image(systemName: "chevron.right")
+									.font(.caption2.weight(.semibold))
+									.foregroundStyle(.tertiary)
+							}
+						}
+						Text(isIncoming ? "Incoming Friend Request" : "Outgoing Request · Pending")
+							.font(.caption)
+							.foregroundStyle(.secondary)
+							.lineLimit(1)
+					}
+					
+					Spacer(minLength: 4)
+				}
+				.contentShape(Rectangle())
+			}
+			.buttonStyle(.plain)
+			.disabled(profileID == nil)
+			
+			if isIncoming {
+				AsyncButton {
+					do {
+						try await socialManager.acceptFriend(friend)
+					} catch {
+						actionError = error.localizedDescription
+					}
+				} label: {
+					Image(systemName: "checkmark.circle.fill")
+						.font(.title2)
+						.foregroundStyle(.green)
+				}
+				.buttonStyle(.plain)
+				.accessibilityLabel("Accept Friend Request")
+				
+				AsyncButton {
+					do {
+						try await socialManager.removeFriend(friend)
+					} catch {
+						actionError = error.localizedDescription
+					}
+				} label: {
+					Image(systemName: "xmark.circle.fill")
+						.font(.title2)
+						.foregroundStyle(Color.valorantRed)
+				}
+				.buttonStyle(.plain)
+				.accessibilityLabel("Decline Friend Request")
+			} else {
+				AsyncButton {
+					do {
+						try await socialManager.removeFriend(friend)
+					} catch {
+						actionError = error.localizedDescription
+					}
+				} label: {
+					Text("Cancel")
+						.font(.caption.weight(.semibold))
+						.foregroundStyle(Color.valorantRed)
+						.padding(.horizontal, 10)
+						.padding(.vertical, 6)
+						.background(Color.tertiaryGroupedBackground, in: Capsule())
+				}
+				.buttonStyle(.plain)
+			}
+		}
+		.padding(.horizontal, 14)
+		.padding(.vertical, 12)
+		.contextMenu {
+			if let profileID {
+				Button {
+					contextProfileUserID = profileID
+				} label: {
+					Label("Open Profile", systemImage: "person.crop.circle")
+				}
+			}
+			
+			if isIncoming {
+				Button {
+					Task {
+						do {
+							try await socialManager.acceptFriend(friend)
+						} catch {
+							actionError = error.localizedDescription
+						}
+					}
+				} label: {
+					Label("Accept Request", systemImage: "checkmark.circle")
+				}
+				
+				Button(role: .destructive) {
+					Task {
+						do {
+							try await socialManager.removeFriend(friend)
+						} catch {
+							actionError = error.localizedDescription
+						}
+					}
+				} label: {
+					Label("Decline Request", systemImage: "xmark.circle")
+				}
+			} else {
+				Button(role: .destructive) {
+					Task {
+						do {
+							try await socialManager.removeFriend(friend)
+						} catch {
+							actionError = error.localizedDescription
+						}
+					}
+				} label: {
+					Label("Cancel Request", systemImage: "xmark.circle")
+				}
+			}
+		}
+	}
+	
+	@ViewBuilder
+	private func requestAvatar(_ friend: XMPPFriend, isIncoming: Bool) -> some View {
+		if let cardID = friend.playerCardID {
+			PlayerCardImage.small(cardID)
+				.frame(width: 44, height: 44)
+				.background(Color.tertiaryGroupedBackground)
+				.clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+		} else {
+			ZStack {
+				RoundedRectangle(cornerRadius: 10, style: .continuous)
+					.fill(Color.tertiaryGroupedBackground)
+					.frame(width: 44, height: 44)
+				Image(systemName: isIncoming ? "person.badge.plus" : "paperplane.fill")
+					.font(.system(size: 17, weight: .semibold))
+					.foregroundStyle(isIncoming ? Color.accentColor : Color.secondary)
 			}
 		}
 	}
@@ -794,11 +888,12 @@ struct FriendsView: View {
 	
 	private func friendPartyRow(_ friend: XMPPFriend, isOfflineStyle: Bool = false, currentAct: Act?) -> some View {
 		let hasUnread = (socialManager.unreadByJID[friend.jid] ?? 0) > 0
-		let opensProfileDirectly = settings.openProfileDirectly && !hasUnread && friend.puuid != nil
+		let profileID = friend.resolvedUserID
+		let opensProfileDirectly = settings.openProfileDirectly && !hasUnread && profileID != nil
 		
 		return Button {
-			if opensProfileDirectly, let puuid = friend.puuid {
-				contextProfileUserID = puuid
+			if opensProfileDirectly, let profileID {
+				contextProfileUserID = profileID
 			} else {
 				contextChatFriend = friend
 			}
@@ -893,13 +988,23 @@ struct FriendsView: View {
 				} label: {
 					Label("Open Chat", systemImage: "message")
 				}
-			} else if let puuid = friend.puuid {
+			} else if let profileID {
 				Button {
-					contextProfileUserID = puuid
+					contextProfileUserID = profileID
 				} label: {
 					Label("Open Profile", systemImage: "person.crop.circle")
 				}
 			}
+			
+			if !friend.isIncomingRequest && !friend.isOutgoingRequest {
+				Button {
+					editingNoteFriend = friend
+				} label: {
+					let hasNote = (friend.note?.isEmpty == false)
+					Label(hasNote ? "Edit Note" : "Add Note", systemImage: hasNote ? "note.text" : "note.text.badge.plus")
+				}
+			}
+			
 			Button(role: .destructive) {
 				Task {
 					do {
@@ -1152,6 +1257,7 @@ struct ChatView: View {
 	
 	@State private var sendError: String?
 	@State private var showingProfile = false
+	@State private var showingNoteEditor = false
 	
 	private var liveFriend: XMPPFriend {
 		socialManager.friendsByJID[friend.jid] ?? friend
@@ -1213,9 +1319,9 @@ struct ChatView: View {
 		}
 		.background(
 			Group {
-				if let puuid = liveFriend.puuid {
+				if let profileID = liveFriend.resolvedUserID {
 					NavigationLink("", isActive: $showingProfile) {
-						MatchListView(userID: puuid)
+						MatchListView(userID: profileID)
 					}
 					.hidden()
 				}
@@ -1229,12 +1335,19 @@ struct ChatView: View {
 			
 			ToolbarItem(placement: .navigationBarTrailing) {
 				Menu {
-					if liveFriend.puuid != nil {
+					if liveFriend.resolvedUserID != nil {
 						Button {
 							showingProfile = true
 						} label: {
 							Label("Open Profile", systemImage: "person.crop.circle")
 						}
+					}
+					
+					Button {
+						showingNoteEditor = true
+					} label: {
+						let hasNote = (liveFriend.note?.isEmpty == false)
+						Label(hasNote ? "Edit Note" : "Add Note", systemImage: hasNote ? "note.text" : "note.text.badge.plus")
 					}
 					
 					let pinned = socialManager.isPinned(liveFriend)
@@ -1265,10 +1378,45 @@ struct ChatView: View {
 				}
 			}
 		}
+		.safeAreaInset(edge: .top) {
+			if let note = liveFriend.note, !note.isEmpty {
+				Button {
+					showingNoteEditor = true
+				} label: {
+					HStack(spacing: 8) {
+						Image(systemName: "text.quote")
+							.font(.caption)
+							.foregroundStyle(Color.accentColor)
+						Text(note)
+							.font(.caption)
+							.foregroundStyle(.primary)
+							.lineLimit(2)
+							.multilineTextAlignment(.leading)
+						Spacer(minLength: 4)
+						Image(systemName: "pencil")
+							.font(.caption2.weight(.semibold))
+							.foregroundStyle(.secondary)
+					}
+					.padding(.horizontal, 12)
+					.padding(.vertical, 8)
+					.background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+					.overlay(
+						RoundedRectangle(cornerRadius: 12, style: .continuous)
+							.stroke(Color.white.opacity(0.1), lineWidth: 1)
+					)
+					.padding(.horizontal, 14)
+					.padding(.top, 6)
+				}
+				.buttonStyle(.plain)
+			}
+		}
 		.safeAreaInset(edge: .bottom) {
 			ChatComposerView(friendJID: friend.jid) { errorMessage in
 				sendError = errorMessage
 			}
+		}
+		.sheet(isPresented: $showingNoteEditor) {
+			FriendNoteEditorSheet(friend: liveFriend)
 		}
 		.onAppear {
 			socialManager.activeChatJID = friend.jid
@@ -1296,7 +1444,7 @@ struct ChatView: View {
 	
 	private var chatPrincipalHeader: some View {
 		Button {
-			guard liveFriend.puuid != nil else { return }
+			guard liveFriend.resolvedUserID != nil else { return }
 			showingProfile = true
 		} label: {
 			HStack(spacing: 9) {
@@ -1323,7 +1471,7 @@ struct ChatView: View {
 								.foregroundStyle(.yellow)
 								.padding(.leading, 2)
 						}
-						if liveFriend.puuid != nil {
+						if liveFriend.resolvedUserID != nil {
 							Image(systemName: "chevron.right")
 								.font(.caption2.weight(.semibold))
 								.foregroundStyle(.secondary)
@@ -1342,7 +1490,7 @@ struct ChatView: View {
 			.contentShape(Rectangle())
 		}
 		.buttonStyle(.plain)
-		.disabled(liveFriend.puuid == nil)
+		.disabled(liveFriend.resolvedUserID == nil)
 	}
 	
 	private var chatStatusSubtitle: String? {
@@ -1730,5 +1878,353 @@ struct FriendListChangesView: View {
 	
 	private func eventRelativeString(_ date: Date) -> String {
 		Self.relativeFormatter.localizedString(for: date, relativeTo: .now)
+	}
+}
+
+// MARK: - Friend Note Editor & Manager
+
+private struct FriendNoteEditorSheet: View {
+	let friend: XMPPFriend
+	
+	@EnvironmentObject private var socialManager: SocialManager
+	@Environment(\.dismiss) private var dismiss
+	
+	@State private var draft: String
+	@State private var isSaving = false
+	@State private var errorMessage: String?
+	@FocusState private var isFocused: Bool
+	
+	init(friend: XMPPFriend) {
+		self.friend = friend
+		self._draft = State(initialValue: friend.note ?? "")
+	}
+	
+	private var liveFriend: XMPPFriend {
+		socialManager.friendsByJID[friend.jid] ?? friend
+	}
+	
+	private var isOverLimit: Bool {
+		draft.count > SocialManager.maxFriendNoteLength
+	}
+	
+	private var canSave: Bool {
+		!isSaving && !isOverLimit && socialManager.connectionState == .connected
+	}
+	
+	var body: some View {
+		NavigationStack {
+			ScrollView {
+				VStack(alignment: .leading, spacing: 16) {
+					headerCard
+					
+					VStack(alignment: .leading, spacing: 10) {
+						TextField(
+							"Write a private note (syncs with VALORANT)...",
+							text: $draft,
+							axis: .vertical
+						)
+						.lineLimit(3...6)
+						.focused($isFocused)
+						
+						Divider().opacity(0.22)
+						
+						HStack {
+							Text("Saved privately on your Riot account")
+								.font(.caption2)
+								.foregroundStyle(.secondary)
+							
+							Spacer()
+							
+							Text("\(draft.count) / \(SocialManager.maxFriendNoteLength)")
+								.font(.caption.monospacedDigit())
+								.foregroundStyle(isOverLimit ? Color.valorantRed : Color.secondary)
+						}
+					}
+					.padding(14)
+					.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+					
+					if socialManager.connectionState != .connected {
+						HStack(spacing: 8) {
+							Image(systemName: "wifi.exclamationmark")
+								.foregroundStyle(.orange)
+							Text("Connect to Riot Chat to save friend notes.")
+								.font(.caption)
+								.foregroundStyle(.secondary)
+						}
+						.padding(12)
+						.frame(maxWidth: .infinity, alignment: .leading)
+						.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+					}
+					
+					if let errorMessage {
+						Text(errorMessage)
+							.font(.caption)
+							.foregroundStyle(Color.valorantRed)
+							.padding(.horizontal, 4)
+					}
+					
+					if let existing = liveFriend.note, !existing.isEmpty {
+						Button(role: .destructive) {
+							save(note: nil)
+						} label: {
+							Label("Clear Note", systemImage: "trash")
+								.font(.subheadline.weight(.semibold))
+								.foregroundStyle(Color.valorantRed)
+								.frame(maxWidth: .infinity)
+								.padding(.vertical, 12)
+								.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+						}
+						.buttonStyle(.plain)
+						.disabled(isSaving || socialManager.connectionState != .connected)
+					}
+				}
+				.padding(16)
+			}
+			.background(Color.groupedBackground)
+			.navigationTitle("Friend Note")
+			.navigationBarTitleDisplayMode(.inline)
+			.toolbar {
+				ToolbarItem(placement: .cancellationAction) {
+					Button("Cancel") { dismiss() }
+				}
+				
+				ToolbarItem(placement: .confirmationAction) {
+					if isSaving {
+						ProgressView()
+					} else {
+						Button("Save") {
+							save(note: draft)
+						}
+						.fontWeight(.semibold)
+						.disabled(!canSave)
+					}
+				}
+			}
+			.onAppear {
+				isFocused = true
+			}
+		}
+		.presentationDetents([.medium])
+	}
+	
+	private var headerCard: some View {
+		HStack(spacing: 12) {
+			if let cardID = liveFriend.playerCardID {
+				PlayerCardImage.small(cardID)
+					.frame(width: 44, height: 44)
+					.background(Color.tertiaryGroupedBackground)
+					.clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+			} else {
+				ZStack {
+					RoundedRectangle(cornerRadius: 10, style: .continuous)
+						.fill(Color.tertiaryGroupedBackground)
+						.frame(width: 44, height: 44)
+					Image(systemName: "person.crop.circle")
+						.font(.title3)
+						.foregroundStyle(.secondary)
+				}
+			}
+			
+			VStack(alignment: .leading, spacing: 2) {
+				HStack(spacing: 0) {
+					Text(liveFriend.gameName.isEmpty ? liveFriend.jid : liveFriend.gameName)
+						.font(.headline.weight(.semibold))
+						.lineLimit(1)
+					if !liveFriend.tagLine.isEmpty {
+						Text("#\(liveFriend.tagLine)")
+							.font(.subheadline)
+							.foregroundStyle(.secondary)
+							.lineLimit(1)
+					}
+				}
+				Text("Private note · visible only to you")
+					.font(.caption)
+					.foregroundStyle(.secondary)
+			}
+			
+			Spacer()
+		}
+		.padding(14)
+		.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+	}
+	
+	private func save(note: String?) {
+		guard !isSaving else { return }
+		errorMessage = nil
+		isSaving = true
+		Task {
+			defer { isSaving = false }
+			do {
+				try await socialManager.updateFriendNote(liveFriend, note: note)
+				dismiss()
+			} catch {
+				errorMessage = error.localizedDescription
+			}
+		}
+	}
+}
+
+private struct FriendNotesManagerSheet: View {
+	@EnvironmentObject private var socialManager: SocialManager
+	@Environment(\.dismiss) private var dismiss
+	
+	@State private var search = ""
+	@State private var selectedFriend: XMPPFriend?
+	
+	private var confirmedFriends: [XMPPFriend] {
+		let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+		return socialManager.friends
+			.filter { friend in
+				guard !friend.isIncomingRequest, !friend.isOutgoingRequest else { return false }
+				guard !query.isEmpty else { return true }
+				return friend.displayName.localizedCaseInsensitiveContains(query)
+					|| (friend.note?.localizedCaseInsensitiveContains(query) ?? false)
+			}
+			.sorted {
+				$0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+			}
+	}
+	
+	var body: some View {
+		let friends = confirmedFriends
+		let withNotes = friends.filter { $0.note?.isEmpty == false }
+		let withoutNotes = friends.filter { $0.note?.isEmpty != false }
+		
+		NavigationStack {
+			ScrollView {
+				LazyVStack(alignment: .leading, spacing: 16) {
+					HStack(spacing: 8) {
+						Image(systemName: "magnifyingglass")
+							.font(.subheadline)
+							.foregroundStyle(.secondary)
+						TextField("Search friends or notes", text: $search)
+							.textInputAutocapitalization(.never)
+							.autocorrectionDisabled()
+						if !search.isEmpty {
+							Button {
+								search = ""
+							} label: {
+								Image(systemName: "xmark.circle.fill")
+									.foregroundStyle(.secondary)
+							}
+							.buttonStyle(.plain)
+						}
+					}
+					.padding(.horizontal, 12)
+					.padding(.vertical, 10)
+					.background(Color.secondaryGroupedBackground, in: Capsule())
+					
+					if !withNotes.isEmpty {
+						notesSection(title: "With Notes — \(withNotes.count)", friends: withNotes)
+					}
+					
+					if !withoutNotes.isEmpty {
+						notesSection(title: "Other Friends — \(withoutNotes.count)", friends: withoutNotes)
+					}
+					
+					if friends.isEmpty {
+						Text("No matching friends.")
+							.font(.subheadline)
+							.foregroundStyle(.secondary)
+							.frame(maxWidth: .infinity)
+							.padding(24)
+							.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+					}
+				}
+				.padding(16)
+			}
+			.background(Color.groupedBackground)
+			.navigationTitle("Friend Notes")
+			.navigationBarTitleDisplayMode(.inline)
+			.toolbar {
+				ToolbarItem(placement: .confirmationAction) {
+					Button("Done") { dismiss() }
+				}
+			}
+			.sheet(item: $selectedFriend) { friend in
+				FriendNoteEditorSheet(friend: friend)
+			}
+		}
+	}
+	
+	private func notesSection(title: String, friends: [XMPPFriend]) -> some View {
+		VStack(alignment: .leading, spacing: 8) {
+			Text(title)
+				.font(.subheadline.weight(.medium))
+				.foregroundStyle(.secondary)
+				.padding(.horizontal, 4)
+			
+			LazyVStack(spacing: 0) {
+				ForEach(Array(friends.enumerated()), id: \.element.id) { index, friend in
+					Button {
+						selectedFriend = friend
+					} label: {
+						HStack(spacing: 12) {
+							if let cardID = friend.playerCardID {
+								PlayerCardImage.small(cardID)
+									.frame(width: 40, height: 40)
+									.background(Color.tertiaryGroupedBackground)
+									.clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+							} else {
+								ZStack {
+									RoundedRectangle(cornerRadius: 9, style: .continuous)
+										.fill(Color.tertiaryGroupedBackground)
+										.frame(width: 40, height: 40)
+									Image(systemName: "person.fill")
+										.font(.subheadline)
+										.foregroundStyle(.secondary)
+								}
+							}
+							
+							VStack(alignment: .leading, spacing: 3) {
+								HStack(spacing: 0) {
+									Text(friend.gameName.isEmpty ? friend.jid : friend.gameName)
+										.font(.subheadline.weight(.semibold))
+										.foregroundStyle(.primary)
+										.lineLimit(1)
+									if !friend.tagLine.isEmpty {
+										Text("#\(friend.tagLine)")
+											.font(.caption)
+											.foregroundStyle(.secondary)
+											.lineLimit(1)
+									}
+								}
+								
+								if let note = friend.note, !note.isEmpty {
+									HStack(spacing: 4) {
+										Image(systemName: "text.quote")
+											.font(.caption2)
+											.foregroundStyle(Color.accentColor)
+										Text(note)
+											.font(.caption)
+											.foregroundStyle(.secondary)
+											.lineLimit(2)
+									}
+								} else {
+									Text("Tap to add note")
+										.font(.caption)
+										.foregroundStyle(.tertiary)
+								}
+							}
+							
+							Spacer()
+							
+							Image(systemName: friend.note?.isEmpty == false ? "pencil" : "plus.circle")
+								.font(.subheadline)
+								.foregroundStyle(Color.accentColor)
+						}
+						.padding(.horizontal, 14)
+						.padding(.vertical, 11)
+						.contentShape(Rectangle())
+					}
+					.buttonStyle(.plain)
+					
+					if index < friends.count - 1 {
+						Divider().opacity(0.22).padding(.leading, 66)
+					}
+				}
+			}
+			.background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+		}
 	}
 }

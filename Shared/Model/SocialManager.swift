@@ -135,6 +135,7 @@ final class SocialManager: ObservableObject {
 	private static let backgroundRefreshInterval: TimeInterval = 300
 	private static let offlineDemoteInterval: TimeInterval = 1800
 	private static let maxCachedMessagesPerConversation = 300
+	static let maxFriendNoteLength = 256
 	
 	@Published var connectionState: ConnectionState = .disconnected
 	@Published var friendsByJID: [String: XMPPFriend] = [:]
@@ -234,7 +235,7 @@ final class SocialManager: ObservableObject {
 					lowercaseToCanonical[bareLower] = friend.jid
 				}
 			}
-			if let puuidKey = friend.puuid?.description.lowercased() {
+			if let puuidKey = friend.resolvedUserID?.description.lowercased() {
 				index[puuidKey] = friend.jid
 			}
 			if let atIndex = friend.jid.firstIndex(of: "@") {
@@ -634,11 +635,7 @@ final class SocialManager: ObservableObject {
 	private func hydrateFriendCardsFromLocalData() async {
 		let targetIDs: [User.ID] = friendsByJID.values.compactMap { friend in
 			guard friend.playerCardID == nil else { return nil }
-			if let puuid = friend.puuid { return puuid }
-			if let atIndex = friend.jid.firstIndex(of: "@") {
-				return User.ID(String(friend.jid[..<atIndex]))
-			}
-			return nil
+			return friend.resolvedUserID
 		}
 		guard !targetIDs.isEmpty, !Task.isCancelled else { return }
 		let identities = await LocalDataProvider.shared.playerIdentityManager.cachedObjects(for: targetIDs)
@@ -676,6 +673,36 @@ final class SocialManager: ObservableObject {
 		pinnedFriendJIDs.remove(Self.normalizedPinnedJID(friend.jid))
 		pinnedFriendJIDs.remove(Self.normalizedPinnedJID(canonical))
 		scheduleCacheSave()
+	}
+	
+	func updateFriendNote(_ friend: XMPPFriend, note: String?) async throws {
+		let targetJID = canonicalJID(for: friend.jid)
+		let current = friendsByJID[targetJID] ?? friend
+		let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+		let normalized: String? = trimmed.isEmpty ? nil : String(trimmed.prefix(Self.maxFriendNoteLength))
+		
+		try await client.setFriendNote(
+			jid: current.jid,
+			puuid: current.resolvedUserID,
+			gameName: current.gameName,
+			tagLine: current.tagLine,
+			note: normalized,
+			subscription: current.subscription,
+			groupName: current.groupName,
+			groupPriority: current.groupPriority
+		)
+		
+		var updated = friendsByJID
+		if updated[targetJID] != nil {
+			updated[targetJID]?.note = normalized
+			commitFriends(updated)
+		} else {
+			var copy = current
+			copy.note = normalized
+			updated[targetJID] = copy
+			commitFriends(updated)
+		}
+		saveCacheNow()
 	}
 	
 	func isPinned(_ friend: XMPPFriend) -> Bool {
@@ -769,7 +796,7 @@ final class SocialManager: ObservableObject {
 				self.connectionState = .disconnected
 			}
 			
-		case let .rosterReceived(list, isFullSnapshot):
+		case let .rosterReceived(list, isFullSnapshot, isServerPush):
 			flushPendingPresenceUpdates()
 			let previousFriends = friendsByJID
 			var updated = friendsByJID
@@ -788,8 +815,12 @@ final class SocialManager: ObservableObject {
 					   let cachedCard = cachedCardByPUUID[key] {
 						existing.playerCardID = cachedCard
 					}
-					if isFullSnapshot || item.note != nil {
+					if isFullSnapshot || isServerPush || item.note != nil {
 						existing.note = item.note
+					}
+					if isFullSnapshot || isServerPush || item.groupName != nil {
+						existing.groupName = item.groupName
+						existing.groupPriority = item.groupPriority
 					}
 					existing.lastOnline = Self.newerDate(existing.lastOnline, item.lastOnline)
 					updated[item.jid] = existing
@@ -924,7 +955,7 @@ final class SocialManager: ObservableObject {
 		let original = friends[update.jid]
 		var friend = original ?? XMPPFriend(
 			jid: update.jid,
-			puuid: update.jid.components(separatedBy: "@").first.flatMap(User.ID.init),
+			puuid: update.jid.components(separatedBy: "@").first.flatMap { User.ID($0.lowercased()) },
 			gameName: "",
 			tagLine: "",
 			subscription: "both"

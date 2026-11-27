@@ -127,6 +127,8 @@ struct XMPPFriend: Identifiable, Equatable, Codable, Sendable {
 	var tagLine: String
 	var subscription: String
 	var note: String? = nil
+	var groupName: String? = nil
+	var groupPriority: String? = nil
 	var status: XMPPFriendStatus = .offline
 	var gameTitle: String? = nil
 	var statusText: String? = nil
@@ -193,7 +195,7 @@ struct XMPPChatMessage: Identifiable, Equatable, Codable, Sendable {
 enum XMPPEvent {
 	case connected(myJID: String)
 	case disconnected(Error?)
-	case rosterReceived([XMPPFriend], isFullSnapshot: Bool)
+	case rosterReceived([XMPPFriend], isFullSnapshot: Bool, isServerPush: Bool)
 	case presenceUpdated(XMPPPresenceUpdate)
 	case messageReceived(XMPPChatMessage)
 	case archiveReceived(peerJID: String, messages: [XMPPChatMessage])
@@ -286,6 +288,14 @@ actor XMPPClient {
 	private var keepaliveTask: Task<Void, Never>?
 	private var eventHandler: (@Sendable (XMPPEvent) async -> Void)?
 	private var pendingArchivePeerByIQID: [String: String] = [:]
+	private var pendingIQContinuations: [String: ContinuationBox<String>] = [:]
+	private var preferredNoteVariantKey: String?
+	
+	private struct IQErrorRejection: Error {
+		let summary: String
+		let condition: String?
+		let code: String?
+	}
 	
 	private let queue = DispatchQueue(label: "com.reconbolt.xmpp")
 	private let maxBufferBytes = 2_000_000
@@ -427,6 +437,11 @@ actor XMPPClient {
 		keepaliveTask?.cancel()
 		keepaliveTask = nil
 		pendingArchivePeerByIQID.removeAll()
+		for box in pendingIQContinuations.values {
+			_ = box.resolve(with: .failure(XMPPError.connectionClosed))
+		}
+		pendingIQContinuations.removeAll()
+		preferredNoteVariantKey = nil
 		connection?.cancel()
 		connection = nil
 		clearBuffer()
@@ -512,6 +527,148 @@ actor XMPPClient {
 		let bare = jid.components(separatedBy: "/").first ?? jid
 		let xml = "<iq type=\"set\" id=\"roster_remove_\(id)\"><query xmlns=\"jabber:iq:riotgames:roster\"><item jid=\"\(escapeXML(bare))\" subscription=\"remove\"/></query></iq>"
 		try await sendRaw(xml)
+	}
+	
+	func setFriendNote(
+		jid: String,
+		puuid: User.ID? = nil,
+		gameName: String? = nil,
+		tagLine: String? = nil,
+		note: String?,
+		subscription: String = "both",
+		groupName: String? = nil,
+		groupPriority: String? = nil
+	) async throws {
+		guard isRunning else { throw XMPPError.notConnected }
+		let bare = jid.components(separatedBy: "/").first ?? jid
+		let escapedBare = escapeXML(bare)
+		
+		let groupPlain: String
+		let groupWithPriority: String
+		if let groupName, !groupName.isEmpty {
+			let escapedGroup = escapeXML(groupName)
+			groupPlain = "<group>\(escapedGroup)</group>"
+			if let groupPriority, !groupPriority.isEmpty {
+				groupWithPriority = "<group priority=\"\(escapeXML(groupPriority))\">\(escapedGroup)</group>"
+			} else {
+				groupWithPriority = groupPlain
+			}
+		} else {
+			groupPlain = ""
+			groupWithPriority = ""
+		}
+		
+		let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+		let noteXML = trimmed.isEmpty ? "<note/>" : "<note>\(escapeXML(trimmed))</note>"
+		let puuidAttr = puuid.map { " puuid=\"\(escapeXML($0.description.lowercased()))\"" } ?? ""
+		let idElement: String
+		if let gameName, !gameName.isEmpty, let tagLine, !tagLine.isEmpty {
+			idElement = "<id name=\"\(escapeXML(gameName))\" tagline=\"\(escapeXML(tagLine))\"/>"
+		} else {
+			idElement = ""
+		}
+		
+		var rawVariants: [(key: String, queryXML: String)] = [
+			(
+				"riot_no_sub_group_prio",
+				"<query xmlns=\"jabber:iq:riotgames:roster\"><item jid=\"\(escapedBare)\">\(groupWithPriority)\(noteXML)</item></query>"
+			),
+			(
+				"riot_no_sub_group_plain",
+				"<query xmlns=\"jabber:iq:riotgames:roster\"><item jid=\"\(escapedBare)\">\(groupPlain)\(noteXML)</item></query>"
+			),
+			(
+				"riot_no_sub_minimal",
+				"<query xmlns=\"jabber:iq:riotgames:roster\"><item jid=\"\(escapedBare)\">\(noteXML)</item></query>"
+			),
+			(
+				"riot_puuid_no_sub",
+				"<query xmlns=\"jabber:iq:riotgames:roster\"><item jid=\"\(escapedBare)\"\(puuidAttr)>\(idElement)\(groupWithPriority)\(noteXML)</item></query>"
+			),
+			(
+				"std_roster_no_sub",
+				"<query xmlns=\"jabber:iq:roster\"><item jid=\"\(escapedBare)\">\(groupPlain)\(noteXML)</item></query>"
+			),
+			(
+				"riot_puuid_with_sub",
+				"<query xmlns=\"jabber:iq:riotgames:roster\"><item jid=\"\(escapedBare)\"\(puuidAttr) subscription=\"\(escapeXML(subscription))\">\(idElement)\(groupWithPriority)\(noteXML)</item></query>"
+			),
+		]
+		if trimmed.isEmpty {
+			rawVariants.append((
+				"riot_no_sub_empty_pair",
+				"<query xmlns=\"jabber:iq:riotgames:roster\"><item jid=\"\(escapedBare)\">\(groupWithPriority)<note></note></item></query>"
+			))
+		}
+		
+		var seenPayloads: Set<String> = []
+		var candidates = rawVariants.filter { seenPayloads.insert($0.queryXML).inserted }
+		if let preferred = preferredNoteVariantKey,
+		   let idx = candidates.firstIndex(where: { $0.key == preferred }),
+		   idx > 0 {
+			let preferredItem = candidates.remove(at: idx)
+			candidates.insert(preferredItem, at: 0)
+		}
+		
+		var firstRejection: IQErrorRejection?
+		var lastRejection: IQErrorRejection?
+		for candidate in candidates {
+			guard isRunning else { throw XMPPError.notConnected }
+			try Task.checkCancellation()
+			let id = "roster_note_\(UUID().uuidString.prefix(8))"
+			let xml = "<iq type=\"set\" id=\"\(id)\">\(candidate.queryXML)</iq>"
+			do {
+				_ = try await sendIQAndWait(id: id, xml: xml, timeoutStep: "saving friend note")
+				preferredNoteVariantKey = candidate.key
+				return
+			} catch let rejection as IQErrorRejection {
+				PerfMonitor.log("XMPP", "setFriendNote variant=\(candidate.key) rejected: \(rejection.summary)")
+				if firstRejection == nil {
+					firstRejection = rejection
+				}
+				lastRejection = rejection
+			}
+		}
+		
+		let detail = firstRejection?.summary ?? lastRejection?.summary ?? "rejected"
+		throw XMPPError.connectionFailed("Riot Chat rejected the friend note update (\(detail)).")
+	}
+	
+	private func sendIQAndWait(
+		id: String,
+		xml: String,
+		timeoutStep: String,
+		timeout: TimeInterval = 5
+	) async throws -> String {
+		let box = ContinuationBox<String>()
+		let timeoutItem = DispatchWorkItem {
+			_ = box.resolve(with: .failure(XMPPError.timedOut(timeoutStep)))
+		}
+		pendingIQContinuations[id] = box
+		defer {
+			timeoutItem.cancel()
+			pendingIQContinuations.removeValue(forKey: id)
+		}
+		
+		return try await withTaskCancellationHandler {
+			try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+				queue.asyncAfter(deadline: .now() + timeout, execute: timeoutItem)
+				box.setContinuation(continuation)
+				Task { [weak self] in
+					guard let self else {
+						_ = box.resolve(with: .failure(XMPPError.connectionClosed))
+						return
+					}
+					do {
+						try await self.sendRaw(xml)
+					} catch {
+						_ = box.resolve(with: .failure(error))
+					}
+				}
+			}
+		} onCancel: {
+			_ = box.resolve(with: .failure(CancellationError()))
+		}
 	}
 	
 	// MARK: - Networking Helpers
@@ -748,6 +905,10 @@ actor XMPPClient {
 					isRunning = false
 					keepaliveTask?.cancel()
 					keepaliveTask = nil
+					for box in pendingIQContinuations.values {
+						_ = box.resolve(with: .failure(XMPPError.connectionClosed))
+					}
+					pendingIQContinuations.removeAll()
 					await eventHandler?(.disconnected(error))
 				}
 				break
@@ -843,19 +1004,97 @@ actor XMPPClient {
 		return nil
 	}
 	
+	private func parseIQError(from stanza: String) -> IQErrorRejection {
+		var errorXML = ""
+		var openTagXML = ""
+		var cursor = stanza.startIndex
+		while let errStart = stanza.range(of: "<error", range: cursor..<stanza.endIndex) {
+			let afterName = errStart.upperBound
+			guard afterName < stanza.endIndex else { break }
+			let next = stanza[afterName]
+			guard next == " " || next == ">" || next == "/" else {
+				cursor = afterName
+				continue
+			}
+			guard let openEnd = findTagEnd(in: stanza, from: afterName) else { break }
+			openTagXML = String(stanza[errStart.lowerBound...openEnd])
+			let isSelfClosing = openEnd > afterName && stanza[stanza.index(before: openEnd)] == "/"
+			if isSelfClosing {
+				errorXML = openTagXML
+			} else if let close = stanza.range(of: "</error>", range: stanza.index(after: openEnd)..<stanza.endIndex) {
+				errorXML = String(stanza[errStart.lowerBound..<close.upperBound])
+			} else {
+				errorXML = String(stanza[errStart.lowerBound...])
+			}
+			break
+		}
+		
+		let code = extractAttribute("code", from: openTagXML)?
+			.trimmingCharacters(in: .whitespacesAndNewlines)
+		let type = extractAttribute("type", from: openTagXML)?
+			.trimmingCharacters(in: .whitespacesAndNewlines)
+		let text = extractTagContent(from: errorXML, tag: "text")
+			.map(unescapeXML)?
+			.trimmingCharacters(in: .whitespacesAndNewlines)
+		
+		let knownConditions = [
+			"bad-request",
+			"not-acceptable",
+			"forbidden",
+			"feature-not-implemented",
+			"item-not-found",
+			"not-allowed",
+			"not-authorized",
+			"conflict",
+			"internal-server-error",
+			"service-unavailable",
+			"jid-malformed",
+			"policy-violation",
+			"resource-constraint",
+			"unexpected-request",
+		]
+		let condition = knownConditions.first { cond in
+			errorXML.contains("<\(cond)>") || errorXML.contains("<\(cond) ") || errorXML.contains("<\(cond)/")
+		}
+		
+		var parts: [String] = []
+		if let code, !code.isEmpty { parts.append("code \(code)") }
+		if let type, !type.isEmpty { parts.append(type) }
+		if let condition { parts.append(condition) }
+		if let text, !text.isEmpty { parts.append(text) }
+		
+		let summary: String
+		if !parts.isEmpty {
+			summary = parts.joined(separator: ", ")
+		} else {
+			let fallback = errorXML.trimmingCharacters(in: .whitespacesAndNewlines)
+			summary = fallback.isEmpty ? "unknown XMPP error" : String(fallback.prefix(160))
+		}
+		return IQErrorRejection(summary: summary, condition: condition, code: code)
+	}
+	
 	private func handleStanza(_ stanza: String) async {
 		if stanza.hasPrefix("<iq") {
 			let iqID = extractAttribute("id", from: stanza) ?? ""
 			let iqType = extractAttribute("type", from: stanza) ?? ""
-			if stanza.contains("jabber:iq:riotgames:roster") || stanza.contains("jabber:iq:roster") {
+			let isError = iqType.lowercased() == "error"
+			if let box = pendingIQContinuations.removeValue(forKey: iqID) {
+				if isError {
+					_ = box.resolve(with: .failure(parseIQError(from: stanza)))
+				} else {
+					_ = box.resolve(with: .success(stanza))
+				}
+			}
+			if !isError, (stanza.contains("jabber:iq:riotgames:roster") || stanza.contains("jabber:iq:roster")) {
 				let isFullSnapshot = (iqType == "result" && iqID.hasPrefix("roster_request"))
+				let isServerPush = (iqType == "set")
 				let friends = parseRosterItems(from: stanza)
 				if !friends.isEmpty || isFullSnapshot {
-					await eventHandler?(.rosterReceived(friends, isFullSnapshot: isFullSnapshot))
+					await eventHandler?(.rosterReceived(friends, isFullSnapshot: isFullSnapshot, isServerPush: isServerPush))
 				}
 			} else if stanza.contains("jabber:iq:riotgames:archive") || pendingArchivePeerByIQID[iqID] != nil {
 				let trackedPeer = pendingArchivePeerByIQID.removeValue(forKey: iqID)
-				if iqType == "error" {
+				if isError {
 					if let trackedPeer {
 						await eventHandler?(.archiveReceived(peerJID: trackedPeer, messages: []))
 					}
@@ -881,39 +1120,65 @@ actor XMPPClient {
 		var result: [XMPPFriend] = []
 		var cursor = xml.startIndex
 		while let itemStart = xml.range(of: "<item", range: cursor..<xml.endIndex) {
-			let rest = itemStart.lowerBound..<xml.endIndex
-			let itemEnd: String.Index
-			if let close = xml.range(of: "</item>", range: rest) {
-				itemEnd = close.upperBound
-			} else if let selfClose = xml.range(of: "/>", range: rest) {
-				itemEnd = selfClose.upperBound
-			} else {
+			let afterName = itemStart.upperBound
+			guard afterName < xml.endIndex else { break }
+			let next = xml[afterName]
+			guard next == " " || next == ">" || next == "/" else {
+				cursor = afterName
+				continue
+			}
+			guard let openEnd = findTagEnd(in: xml, from: afterName) else {
 				break
 			}
-			let itemXML = String(xml[itemStart.lowerBound..<itemEnd])
-			cursor = itemEnd
+			let openTagXML = String(xml[itemStart.lowerBound...openEnd])
+			let isSelfClosing = openEnd > afterName && xml[xml.index(before: openEnd)] == "/"
+			let bodyXML: String
+			if isSelfClosing {
+				cursor = xml.index(after: openEnd)
+				bodyXML = ""
+			} else {
+				let contentStart = xml.index(after: openEnd)
+				guard let close = xml.range(of: "</item>", range: contentStart..<xml.endIndex) else {
+					break
+				}
+				cursor = close.upperBound
+				bodyXML = String(xml[contentStart..<close.lowerBound])
+			}
 			
-			let jid = (extractAttribute("jid", from: itemXML) ?? "").components(separatedBy: "/").first ?? ""
-			let puuidStr = extractAttribute("puuid", from: itemXML) ?? jid.components(separatedBy: "@").first
-			let puuid = puuidStr.flatMap(User.ID.init)
-			let subscription = extractAttribute("subscription", from: itemXML) ?? "both"
+			let jid = (extractAttribute("jid", from: openTagXML) ?? "").components(separatedBy: "/").first ?? ""
+			let puuidStr = extractAttribute("puuid", from: openTagXML) ?? jid.components(separatedBy: "@").first
+			let puuid = puuidStr.flatMap { User.ID($0.lowercased()) }
+			let rawSub = extractAttribute("subscription", from: openTagXML) ?? "both"
+			let ask = extractAttribute("ask", from: openTagXML)?.lowercased()
+			let subscription: String
+			switch rawSub.lowercased() {
+			case "none" where ask == "subscribe", "to":
+				subscription = "pending_out"
+			case "from":
+				subscription = "pending_in"
+			default:
+				subscription = rawSub
+			}
+			
 			let gameName = unescapeXML(
-				extractNestedAttribute("id", attr: "name", from: itemXML)
-				?? extractNestedAttribute("riot", attr: "name", from: itemXML)
-				?? extractNestedAttribute("item", attr: "name", from: itemXML)
+				extractNestedAttribute("id", attr: "name", from: bodyXML)
+				?? extractNestedAttribute("riot", attr: "name", from: bodyXML)
+				?? extractAttribute("name", from: openTagXML)
 				?? ""
 			)
 			let tagLine = unescapeXML(
-				extractNestedAttribute("id", attr: "tagline", from: itemXML)
-				?? extractNestedAttribute("riot", attr: "tagline", from: itemXML)
-				?? extractNestedAttribute("item", attr: "tagline", from: itemXML)
+				extractNestedAttribute("id", attr: "tagline", from: bodyXML)
+				?? extractNestedAttribute("riot", attr: "tagline", from: bodyXML)
+				?? extractAttribute("tagline", from: openTagXML)
 				?? ""
 			)
-			let rawNote = extractTagContent(from: itemXML, tag: "note")
+			let groupName = extractTagContent(from: bodyXML, tag: "group").map(unescapeXML)
+			let groupPriority = extractNestedAttribute("group", attr: "priority", from: bodyXML)
+			let rawNote = extractTagContent(from: bodyXML, tag: "note")
 				.map(unescapeXML)?
 				.trimmingCharacters(in: .whitespacesAndNewlines)
 			let note = (rawNote?.isEmpty == false) ? rawNote : nil
-			let lastOnline = parseRiotTimestamp(extractTagContent(from: itemXML, tag: "last_online"))
+			let lastOnline = parseRiotTimestamp(extractTagContent(from: bodyXML, tag: "last_online"))
 			
 			guard !jid.isEmpty else { continue }
 			result.append(XMPPFriend(
@@ -923,6 +1188,8 @@ actor XMPPClient {
 				tagLine: tagLine,
 				subscription: subscription,
 				note: note,
+				groupName: groupName,
+				groupPriority: groupPriority,
 				lastOnline: lastOnline
 			))
 		}
